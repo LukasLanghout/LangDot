@@ -3,7 +3,7 @@
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
-export const MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+export const MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-20b";
 
 export type ToolCall = {
   id: string;
@@ -73,11 +73,15 @@ export class RateLimitError extends Error {
   }
 }
 
-/** Model maakte een ongeldige tool-call (komt bij Llama soms voor): probeer het volgende model. */
-class ToolUseFailedError extends GroqError {}
+/**
+ * Dit model is nu niet bruikbaar: ongeldige tool-call, of het model bestaat niet (meer) / is
+ * niet beschikbaar voor dit account. Probeer het volgende model.
+ */
+class SkipModelError extends GroqError {}
 
-// Uitwijkmodellen hebben op Groq elk een eigen daglimiet.
-const FALLBACK_MODELS = (process.env.GROQ_FALLBACK_MODELS ?? "openai/gpt-oss-120b,openai/gpt-oss-20b")
+// Uitwijkmodellen hebben op Groq elk een eigen daglimiet. Het primaire model staat er ook in,
+// zodat een onbruikbare GROQ_MODEL (bv. een Enterprise-only Llama) altijd terugvalt op gpt-oss.
+const FALLBACK_MODELS = (process.env.GROQ_FALLBACK_MODELS ?? "openai/gpt-oss-20b,openai/gpt-oss-120b")
   .split(",").map((s) => s.trim()).filter(Boolean);
 
 // Per serverless-instantie onthouden welk model tot wanneer op slot zit.
@@ -121,7 +125,12 @@ async function postOnce(body: Record<string, unknown>, model: string): Promise<R
       continue;
     }
     const text = await res.text();
-    if (res.status === 400 && text.includes("tool_use_failed")) throw new ToolUseFailedError(res.status, text);
+    if (
+      (res.status === 400 && /tool_use_failed|model_decommissioned/.test(text)) ||
+      ((res.status === 404 || res.status === 403) && /model/.test(text))
+    ) {
+      throw new SkipModelError(res.status, text);
+    }
     throw new GroqError(res.status, text);
   }
   throw new Error("Groq: te veel pogingen");
@@ -134,13 +143,14 @@ async function post(body: Record<string, unknown>): Promise<Response> {
   const available = chain.filter((m) => (exhaustedUntil.get(m) ?? 0) < Date.now());
 
   let lastLimit: RateLimitError | null = null;
-  let lastToolError: ToolUseFailedError | null = null;
+  let lastSkip: SkipModelError | null = null;
   for (const model of available) {
     try {
       return await postOnce(body, model);
     } catch (e) {
-      if (e instanceof ToolUseFailedError) {
-        lastToolError = e;
+      if (e instanceof SkipModelError) {
+        console.warn(`groq: model ${model} overgeslagen (${e.message.slice(0, 160)})`);
+        lastSkip = e;
         continue;
       }
       if (!(e instanceof RateLimitError)) throw e;
@@ -149,7 +159,7 @@ async function post(body: Record<string, unknown>): Promise<Response> {
     }
   }
   if (lastLimit) throw lastLimit;
-  if (lastToolError) throw lastToolError;
+  if (lastSkip) throw lastSkip;
   // Alles staat nog op slot uit een eerdere aanroep.
   const soonest = Math.min(...chain.map((m) => exhaustedUntil.get(m) ?? Date.now()));
   throw new RateLimitError(Math.max(soonest - Date.now(), 1000), primary);

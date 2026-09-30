@@ -153,8 +153,8 @@ src/
 
 ### 2. Groq
 
-Maak een key op <https://console.groq.com/keys>. Standaardmodel: `llama-3.3-70b-versatile`, met
-`openai/gpt-oss-120b` en `openai/gpt-oss-20b` als uitwijk. Aanpasbaar via `GROQ_MODEL` en `GROQ_FALLBACK_MODELS`.
+Maak een key op <https://console.groq.com/keys>. Standaardmodel: `openai/gpt-oss-20b`, met
+`openai/gpt-oss-120b` als uitwijk. Llama-modellen zijn op Groq inmiddels Enterprise-only; een onbeschikbaar model wordt automatisch overgeslagen. Aanpasbaar via `GROQ_MODEL` en `GROQ_FALLBACK_MODELS`.
 
 ### 3. Environment variables
 
@@ -166,10 +166,10 @@ Zie `.env.example`. Lokaal: kopieer naar `.env.local`. Op Vercel: Project → Se
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | idem (anon of `sb_publishable_…`) | publiek, RLS beschermt |
 | `SUPABASE_SERVICE_ROLE_KEY` | idem (service_role / `sb_secret_…`) | **alleen server** |
 | `GROQ_API_KEY` | console.groq.com | |
-| `GROQ_MODEL` | optioneel | default `llama-3.3-70b-versatile` |
+| `GROQ_MODEL` | optioneel | default `openai/gpt-oss-20b` |
 | `CRON_SECRET` | zelf verzinnen | lange random string |
-| `GROQ_FALLBACK_MODELS` | optioneel | uitwijkmodellen bij een limiet of mislukte tool-call, default `openai/gpt-oss-120b,openai/gpt-oss-20b` |
-| `GROQ_SEARCH_MODEL` | optioneel | model voor Groq `browser_search`, default `openai/gpt-oss-120b` |
+| `GROQ_FALLBACK_MODELS` | optioneel | uitwijkmodellen bij een limiet of onbruikbaar model, default `openai/gpt-oss-120b` |
+| `GROQ_SEARCH_MODEL` | optioneel | model voor Groq `browser_search`, default gelijk aan `GROQ_MODEL` |
 | `TAVILY_API_KEY` | optioneel | krijgt voorrang bij zoeken; anders Groq `browser_search` |
 | `CAURA_API_KEY` + `CAURA_TENANT_ID` | optioneel, caura.ai | gedeeld geheugen tussen dots/agents (zie hieronder) |
 | `CAURA_FLEET_PREFIX` | optioneel | fleet = `<prefix>-<user id>`, default `langdot` |

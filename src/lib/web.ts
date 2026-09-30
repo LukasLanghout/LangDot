@@ -1,7 +1,7 @@
 // Alleen-lezen webtools. Alles wat hier terugkomt is DATA, geen instructies:
 // de agent krijgt het verpakt in <untrusted_web_content> tags.
 
-import { groqRequest } from "./groq";
+import { groqRequest, MODEL } from "./groq";
 
 const UA = "Mozilla/5.0 (compatible; LangDot/0.1; +https://github.com/)";
 const MAX_BYTES = 1_000_000;
@@ -183,7 +183,7 @@ function collectSources(node: unknown, out: Map<string, SearchResult>, depth = 0
 
 async function groqBrowserSearch(query: string): Promise<SearchResponse> {
   const json = await groqRequest({
-    model: process.env.GROQ_SEARCH_MODEL || "openai/gpt-oss-120b",
+    model: process.env.GROQ_SEARCH_MODEL || MODEL,
     messages: [
       {
         role: "system",
