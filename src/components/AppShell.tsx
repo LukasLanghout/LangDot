@@ -36,7 +36,17 @@ const byCreatedAsc = (a: { created_at: string }, b: { created_at: string }) => a
 const byCreatedDesc = (a: { created_at: string }, b: { created_at: string }) => b.created_at.localeCompare(a.created_at);
 const byUpdatedDesc = (a: { updated_at: string }, b: { updated_at: string }) => b.updated_at.localeCompare(a.updated_at);
 
-export function AppShell({ userId, initialProfile, initial }: { userId: string; initialProfile: Profile; initial: Initial }) {
+export function AppShell({
+  userId,
+  initialProfile,
+  initial,
+  cauraFleet,
+}: {
+  userId: string;
+  initialProfile: Profile;
+  initial: Initial;
+  cauraFleet: string | null;
+}) {
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
 
@@ -221,7 +231,7 @@ export function AppShell({ userId, initialProfile, initial }: { userId: string; 
         </nav>
         <div className="flex-1 min-h-0 overflow-y-auto p-3">
           {tab === "activity" && <ActivityPanel tasks={tasks} drafts={drafts} paused={profile.paused} />}
-          {tab === "memory" && <MemoryPanel userId={userId} memories={memories} />}
+          {tab === "memory" && <MemoryPanel memories={memories} cauraFleet={cauraFleet} />}
           {tab === "scheduled" && <SchedulePanel userId={userId} schedules={schedules} />}
           {tab === "audit" && <AuditPanel entries={audit} />}
         </div>

@@ -60,4 +60,15 @@ body {
 .msg a { color: var(--color-accent); text-decoration: underline; word-break: break-all; }
 .msg code { background: var(--color-panel-2); padding: 0 0.25rem; border-radius: 4px; font-size: 0.9em; }
 .msg ul { list-style: disc; padding-left: 1.25rem; margin: 0.25rem 0; }
+.msg ol { list-style: decimal; padding-left: 1.25rem; margin: 0.25rem 0; }
+.msg li + li { margin-top: 0.15rem; }
 .msg hr { border-color: var(--color-line); margin: 0.75rem 0; }
+.msg h1, .msg h2, .msg h3, .msg h4 { font-weight: 600; margin: 0.6rem 0 0.25rem; }
+.msg strong { font-weight: 600; }
+.msg blockquote { border-left: 3px solid var(--color-line); padding-left: 0.75rem; color: var(--color-muted); }
+.msg pre { background: var(--color-panel-2); padding: 0.6rem; border-radius: 8px; overflow-x: auto; font-size: 0.85em; }
+.msg pre code { background: none; padding: 0; }
+.msg .table-wrap { overflow-x: auto; margin: 0.5rem 0; }
+.msg table { border-collapse: collapse; font-size: 0.9em; }
+.msg th, .msg td { border: 1px solid var(--color-line); padding: 0.3rem 0.55rem; text-align: left; vertical-align: top; }
+.msg th { background: var(--color-panel-2); font-weight: 600; }

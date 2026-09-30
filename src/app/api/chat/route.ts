@@ -46,7 +46,7 @@ export async function POST(req: Request) {
       send({ t: "user", id: saved.id });
       let createdTask = false;
       try {
-        const result = await runChat({ db, userId: user.id, send });
+        const result = await runChat({ db, userId: user.id, userMessageId: saved.id, userText: message, send });
         createdTask = result.createdTask;
         const text = result.text.trim() || "…";
         const { data: reply } = await db
@@ -57,7 +57,14 @@ export async function POST(req: Request) {
         send({ t: "done", id: reply?.id ?? null });
       } catch (e) {
         console.error("chat failed", e);
-        send({ t: "error", message: e instanceof Error ? e.message : "Er ging iets mis" });
+        const reason = e instanceof Error ? e.message : "Er ging iets mis";
+        send({ t: "error", message: reason });
+        // Ook een mislukt antwoord opslaan, zodat vraag en antwoord in de history gepaard blijven.
+        await db.from("dot_messages").insert({
+          user_id: user.id,
+          role: "assistant",
+          content: `⚠ Mijn antwoord op dit bericht is mislukt door een technische fout (${reason.slice(0, 200)}).`,
+        });
       } finally {
         try {
           controller.close();

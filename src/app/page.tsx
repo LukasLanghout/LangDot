@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { AppShell } from "@/components/AppShell";
+import { cauraEnabled, fleetFor } from "@/lib/caura";
 import type { AuditEntry, Draft, Memory, Message, Profile, Schedule, Task } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +26,7 @@ export default async function Home() {
   return (
     <AppShell
       userId={user.id}
+      cauraFleet={cauraEnabled() ? fleetFor(user.id) : null}
       initialProfile={profile as Profile}
       initial={{
         messages: ((messages.data ?? []) as Message[]).reverse(),

@@ -1,7 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { useState } from "react";
 import type { Memory, MemoryKind } from "@/lib/types";
 import { formatTime } from "./ui";
 
@@ -59,37 +58,40 @@ function MemoryRow({ memory, onSave, onDelete }: {
   );
 }
 
-export function MemoryPanel({ userId, memories }: { userId: string; memories: Memory[] }) {
-  const supabase = useMemo(() => createClient(), []);
+export function MemoryPanel({ memories, cauraFleet }: { memories: Memory[]; cauraFleet: string | null }) {
   const [newContent, setNewContent] = useState("");
   const [newKind, setNewKind] = useState<MemoryKind>("preference");
   const [filter, setFilter] = useState<MemoryKind | "all">("all");
   const [error, setError] = useState<string | null>(null);
 
-  const audit = (action: string, input: unknown) =>
-    supabase.from("dot_audit").insert({ user_id: userId, actor: "user", action, input });
+  // Via de server: die houdt het audit-log bij en synchroniseert met Caura.
+  async function api(method: "POST" | "PATCH" | "DELETE", body?: unknown, query = "") {
+    setError(null);
+    const res = await fetch(`/api/memories${query}`, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (!res.ok) {
+      setError((await res.json().catch(() => null))?.error ?? `Mislukt (HTTP ${res.status})`);
+      return false;
+    }
+    return true;
+  }
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
     const content = newContent.trim();
     if (!content) return;
-    const { error } = await supabase.from("dot_memories").insert({ user_id: userId, kind: newKind, content });
-    if (error) return setError(error.message);
-    await audit("memory_added", { kind: newKind, content });
-    setNewContent("");
+    if (await api("POST", { kind: newKind, content })) setNewContent("");
   }
 
   async function save(m: Memory, content: string, kind: MemoryKind) {
-    const { error } = await supabase.from("dot_memories")
-      .update({ content, kind, updated_at: new Date().toISOString() }).eq("id", m.id);
-    if (error) return setError(error.message);
-    await audit("memory_edited", { id: m.id, before: m.content, after: content, kind });
+    await api("PATCH", { id: m.id, content, kind });
   }
 
   async function remove(m: Memory) {
-    const { error } = await supabase.from("dot_memories").delete().eq("id", m.id);
-    if (error) return setError(error.message);
-    await audit("memory_deleted", { id: m.id, content: m.content });
+    await api("DELETE", undefined, `?id=${encodeURIComponent(m.id)}`);
   }
 
   const shown = filter === "all" ? memories : memories.filter((m) => m.kind === filter);
@@ -99,6 +101,13 @@ export function MemoryPanel({ userId, memories }: { userId: string; memories: Me
       <p className="text-xs text-muted">
         Wat je dot over je onthoudt. Hij schrijft hier zelf in, en gebruikt het in elk gesprek en elke taak.
       </p>
+      {cauraFleet && (
+        <p className="text-xs rounded-lg border border-accent/40 bg-accent/10 px-2.5 py-1.5">
+          Gedeeld via Caura · fleet <code className="break-all">{cauraFleet}</code>
+          <br />
+          <span className="text-muted">Andere dots/agents die in deze fleet schrijven, delen deze kennis.</span>
+        </p>
+      )}
 
       <form onSubmit={add} className="rounded-lg border border-line p-2.5 space-y-2">
         <textarea value={newContent} onChange={(e) => setNewContent(e.target.value)} rows={2} placeholder="Nieuwe notitie…"

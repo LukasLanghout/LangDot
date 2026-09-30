@@ -1,6 +1,8 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { Task, TaskStatus } from "@/lib/types";
 
 export function formatTime(iso: string) {
@@ -83,71 +85,24 @@ export function QuestionOptions({ task }: { task: Task }) {
   );
 }
 
-// ─────────── Mini-Markdown (veilig: bouwt React-elementen, geen innerHTML) ───────────
-
-const INLINE = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/g;
-
-function inline(text: string, keyBase: string) {
-  const parts = text.split(INLINE);
-  return parts.map((p, i) => {
-    const key = `${keyBase}-${i}`;
-    if (!p) return null;
-    if (p.startsWith("**") && p.endsWith("**") && p.length > 4) return <strong key={key}>{p.slice(2, -2)}</strong>;
-    if (p.startsWith("`") && p.endsWith("`") && p.length > 2) return <code key={key}>{p.slice(1, -1)}</code>;
-    const link = p.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);
-    if (link) return <a key={key} href={link[2]} target="_blank" rel="noopener noreferrer">{link[1]}</a>;
-    if (/^https?:\/\//.test(p)) return <a key={key} href={p} target="_blank" rel="noopener noreferrer">{p}</a>;
-    return <Fragment key={key}>{p}</Fragment>;
-  });
-}
+// ─────────── Markdown (react-markdown + GFM: tabellen, lijsten, links; geen ruwe HTML) ───────────
 
 export function Markdown({ text }: { text: string }) {
-  const lines = text.replace(/\r/g, "").split("\n");
-  const blocks: React.ReactNode[] = [];
-  let para: string[] = [];
-  let list: string[] = [];
-
-  const flushPara = () => {
-    if (!para.length) return;
-    const k = `p${blocks.length}`;
-    blocks.push(
-      <p key={k}>
-        {para.map((l, i) => (
-          <Fragment key={i}>
-            {i > 0 && <br />}
-            {inline(l, `${k}-${i}`)}
-          </Fragment>
-        ))}
-      </p>,
-    );
-    para = [];
-  };
-  const flushList = () => {
-    if (!list.length) return;
-    const k = `ul${blocks.length}`;
-    blocks.push(<ul key={k}>{list.map((l, i) => <li key={i}>{inline(l, `${k}-${i}`)}</li>)}</ul>);
-    list = [];
-  };
-
-  for (const raw of lines) {
-    const line = raw.trimEnd();
-    if (/^\s*[-*]\s+/.test(line) && !/^-{3,}$/.test(line.trim())) {
-      flushPara();
-      list.push(line.replace(/^\s*[-*]\s+/, ""));
-    } else if (/^-{3,}$/.test(line.trim())) {
-      flushPara();
-      flushList();
-      blocks.push(<hr key={`hr${blocks.length}`} />);
-    } else if (!line.trim()) {
-      flushPara();
-      flushList();
-    } else {
-      flushList();
-      const heading = line.match(/^#{1,6}\s+(.*)$/);
-      para.push(heading ? `**${heading[1]}**` : line);
-    }
-  }
-  flushPara();
-  flushList();
-  return <div className="msg">{blocks}</div>;
+  return (
+    <div className="msg">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" />,
+          table: ({ node: _node, ...props }) => (
+            <div className="table-wrap">
+              <table {...props} />
+            </div>
+          ),
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
 }

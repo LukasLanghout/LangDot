@@ -168,7 +168,10 @@ Zie `.env.example`. Lokaal: kopieer naar `.env.local`. Op Vercel: Project → Se
 | `GROQ_API_KEY` | console.groq.com | |
 | `GROQ_MODEL` | optioneel | default `openai/gpt-oss-120b` |
 | `CRON_SECRET` | zelf verzinnen | lange random string |
-| `TAVILY_API_KEY` | optioneel | betere zoekresultaten; anders DuckDuckGo |
+| `GROQ_SEARCH_MODEL` | optioneel | model voor Groq `browser_search`, default `openai/gpt-oss-120b` |
+| `TAVILY_API_KEY` | optioneel | krijgt voorrang bij zoeken; anders Groq `browser_search` |
+| `CAURA_API_KEY` + `CAURA_TENANT_ID` | optioneel, caura.ai | gedeeld geheugen tussen dots/agents (zie hieronder) |
+| `CAURA_FLEET_PREFIX` | optioneel | fleet = `<prefix>-<user id>`, default `langdot` |
 
 ### 4. Lokaal draaien
 
@@ -196,6 +199,22 @@ select status_code, created from net._http_response order by created desc limit 
 
 ---
 
+## Gedeeld geheugen met Caura (optioneel)
+
+Met `CAURA_API_KEY` en `CAURA_TENANT_ID` gezet, gaat elke geheugennotitie ook naar [Caura](https://caura.ai):
+
+- **Schrijven:** `memory_write` en het Geheugen-paneel schrijven naar Supabase én naar Caura
+  (`POST /api/v1/memories`, `visibility: scope_team`, `agent_id` = de handle van de dot).
+  Bewerken en verwijderen in het paneel lopen via `/api/memories` en synchroniseren mee (`caura_id` per notitie).
+- **Lezen:** in elke prompt komen, naast de eigen notities, recente notities uit de fleet die andere dots of agents
+  schreven (`GET /api/v1/memories?scope=fleet`). `memory_read` met een zoekterm doorzoekt Caura ook semantisch
+  (`POST /api/v1/search`).
+- **Fleet:** één per gebruiker, `langdot-<user id>`. Het Geheugen-paneel toont de exacte naam. Laat een andere dot of
+  agent (bv. via Caura's MCP-server in Claude of Cursor) in diezelfde fleet schrijven, en ze leren van elkaar.
+- Is Caura onbereikbaar, dan werkt alles gewoon door op Supabase; fouten komen alleen in de serverlog.
+
+Voer hiervoor ook `supabase/migrations/0002_caura.sql` uit.
+
 ## Uitproberen
 
 - *"Zoek 3 goede Italiaanse restaurants in Utrecht en maak een shortlist"* → taak met stappen in Activity.
@@ -212,6 +231,6 @@ en een echte verzendkoppeling voor mail.
 
 ## Bekende beperkingen
 
-- `web_search` zonder Tavily-key gebruikt de HTML-versie van DuckDuckGo; die kan soms serverless IP's blokkeren.
+- `web_search` probeert: Tavily (als er een key is) → Groq `browser_search` (zelfde Groq-key) → DuckDuckGo HTML. Levert geen van drieën bronnen op, dan krijgt de agent een harde fout plus de instructie niets te verzinnen.
 - De SSRF-bescherming van `web_fetch` controleert hostnamen/IP's, maar niet DNS-rebinding.
 - Groq free tier heeft rate limits; bij 429 probeert de client het kort opnieuw, daarna een retry via de worker.

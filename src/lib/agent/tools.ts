@@ -3,6 +3,7 @@ import type { ToolDef } from "@/lib/groq";
 import { logAudit } from "@/lib/audit";
 import { computeNextRun, describeDays, formatInZone, isValidTime, isValidZone } from "@/lib/schedule";
 import { webFetch, webSearch, wrapUntrusted } from "@/lib/web";
+import { cauraEnabled, cauraSearch, cauraUpdate, cauraWrite } from "@/lib/caura";
 
 export type ToolContext = {
   db: SupabaseClient;
@@ -11,6 +12,8 @@ export type ToolContext = {
   origin: "chat" | "worker";
   /** Wordt true als create_task is aangeroepen, zodat de route de worker kan aftrappen. */
   createdTask?: boolean;
+  /** Cache van de dot-handle (Caura agent_id). */
+  agentId?: string;
 };
 
 function tool(name: string, description: string, properties: Record<string, unknown>, required: string[] = []): ToolDef {
@@ -21,7 +24,8 @@ const MEMORY_KINDS = ["preference", "decision", "work", "fact"];
 
 const memoryRead = tool(
   "memory_read",
-  "Zoek in je geheugen-notities over de gebruiker (voorkeuren, beslissingen, lopend werk, feiten).",
+  "Zoek in je geheugen-notities over de gebruiker (voorkeuren, beslissingen, lopend werk, feiten). " +
+    "Met een zoekterm wordt ook het gedeelde geheugen van andere dots/agents doorzocht (shared_memories).",
   { query: { type: "string", description: "Optioneel zoekwoord; leeg = alles" } },
 );
 
@@ -160,6 +164,15 @@ export function parseArgs(raw: string): Record<string, any> | null {
   }
 }
 
+/** Caura agent_id = de handle van de dot (bv. @pixel-dot). */
+async function agentIdFor(ctx: ToolContext) {
+  if (!ctx.agentId) {
+    const { data } = await ctx.db.from("dot_profiles").select("handle").eq("user_id", ctx.userId).maybeSingle();
+    ctx.agentId = data?.handle ?? "langdot";
+  }
+  return ctx.agentId!;
+}
+
 const str = (v: unknown, max = 4000) => (typeof v === "string" ? v.trim().slice(0, max) : "");
 
 /** Voert een (niet-terminale) tool uit, logt de call in het audit-log en geeft een JSON-string terug voor het model. */
@@ -174,7 +187,16 @@ export async function executeTool(ctx: ToolContext, name: string, rawArgs: strin
     forModel = typeof output === "string" ? output : JSON.stringify(output);
   } catch (e) {
     output = { error: e instanceof Error ? e.message : String(e) };
-    forModel = JSON.stringify(output);
+    forModel = JSON.stringify(
+      name === "web_search" || name === "web_fetch"
+        ? {
+            ...output,
+            instruction:
+              "Je hebt hierdoor GEEN bronnen. Noem geen namen, adressen, prijzen, cijfers of nieuws uit eigen kennis " +
+              "ter vervanging. Zeg eerlijk dat het opzoeken mislukte en bied aan het later opnieuw te proberen.",
+          }
+        : output,
+    );
   }
 
   await logAudit(ctx.db, {
@@ -201,7 +223,18 @@ async function run(ctx: ToolContext, name: string, a: Record<string, any>): Prom
       if (query) q = q.ilike("content", `%${query.replace(/[%_]/g, "")}%`);
       const { data, error } = await q;
       if (error) throw new Error(error.message);
-      return { memories: data };
+
+      // Met Caura: ook semantisch zoeken in het gedeelde geheugen van alle dots/agents van deze gebruiker.
+      let shared: unknown[] | undefined;
+      if (query && cauraEnabled()) {
+        try {
+          const hits = await cauraSearch({ userId, agentId: await agentIdFor(ctx), query });
+          shared = hits.map((h) => ({ content: h.content, type: h.memory_type, written_by: h.agent_id }));
+        } catch (e) {
+          shared = [{ error: `Caura niet bereikbaar: ${e instanceof Error ? e.message.slice(0, 120) : e}` }];
+        }
+      }
+      return shared ? { memories: data, shared_memories: shared } : { memories: data };
     }
 
     case "memory_write": {
@@ -211,14 +244,17 @@ async function run(ctx: ToolContext, name: string, a: Record<string, any>): Prom
       if (a.id) {
         const { data, error } = await db.from("dot_memories")
           .update({ content, kind, updated_at: new Date().toISOString() })
-          .eq("id", a.id).eq("user_id", userId).select("id").maybeSingle();
+          .eq("id", a.id).eq("user_id", userId).select("id, caura_id").maybeSingle();
         if (error) throw new Error(error.message);
         if (!data) throw new Error("Notitie niet gevonden");
+        if (data.caura_id) await cauraUpdate({ agentId: await agentIdFor(ctx), cauraId: data.caura_id, content, kind });
         return { ok: true, id: data.id, updated: true };
       }
       const { data, error } = await db.from("dot_memories").insert({ user_id: userId, kind, content }).select("id").single();
       if (error) throw new Error(error.message);
-      return { ok: true, id: data.id };
+      const cauraId = await cauraWrite({ userId, agentId: await agentIdFor(ctx), content, kind, localId: data.id });
+      if (cauraId) await db.from("dot_memories").update({ caura_id: cauraId }).eq("id", data.id);
+      return { ok: true, id: data.id, shared: !!cauraId };
     }
 
     case "create_task": {

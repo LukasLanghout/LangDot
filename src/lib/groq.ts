@@ -57,6 +57,12 @@ function buildBody(opts: ChatOptions, stream: boolean) {
   return body;
 }
 
+/** Ruwe aanroep met een zelf samengestelde body (bv. voor built-in tools). */
+export async function groqRequest(body: Record<string, unknown>): Promise<any> {
+  const res = await post(body);
+  return res.json();
+}
+
 async function post(body: Record<string, unknown>): Promise<Response> {
   const key = process.env.GROQ_API_KEY;
   if (!key) throw new Error("GROQ_API_KEY ontbreekt");
