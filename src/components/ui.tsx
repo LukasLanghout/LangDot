@@ -5,10 +5,20 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Task, TaskStatus } from "@/lib/types";
 
+// Vaste tijdzone: de server (UTC) en de browser moeten exact dezelfde tekst renderen,
+// anders geeft React een hydration-fout (#418).
+const TZ = "Europe/Amsterdam";
+const dayKey = (d: Date) => d.toLocaleDateString("nl-NL", { timeZone: TZ });
+
 export function formatTime(iso: string) {
   const d = new Date(iso);
-  const sameDay = d.toDateString() === new Date().toDateString();
-  return d.toLocaleString("nl-NL", sameDay ? { hour: "2-digit", minute: "2-digit" } : { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  const sameDay = dayKey(d) === dayKey(new Date());
+  return d.toLocaleString(
+    "nl-NL",
+    sameDay
+      ? { hour: "2-digit", minute: "2-digit", timeZone: TZ }
+      : { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: TZ },
+  );
 }
 
 const STATUS: Record<TaskStatus, { label: string; cls: string }> = {

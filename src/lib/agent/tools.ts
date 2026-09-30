@@ -210,7 +210,7 @@ export async function executeTool(ctx: ToolContext, name: string, rawArgs: strin
     output,
   });
 
-  return forModel.slice(0, 12000);
+  return forModel.slice(0, 7000);
 }
 
 async function run(ctx: ToolContext, name: string, a: Record<string, any>): Promise<unknown> {

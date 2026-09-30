@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { chat, type ChatMessage } from "@/lib/groq";
+import { chat, RateLimitError, type ChatMessage } from "@/lib/groq";
 import { logAudit } from "@/lib/audit";
 import { computeNextRun } from "@/lib/schedule";
 import type { Option, Schedule, Step, Task } from "@/lib/types";
@@ -14,7 +14,7 @@ import { loadAgentContext, plannerPrompt, stepBrief, summaryPrompt, workerSystem
 // ─────────────────────────────────────────────────────────────────────────────
 
 const LOCK_MS = 120_000;
-const MAX_TOOL_ROUNDS = 8;
+const MAX_TOOL_ROUNDS = 6;
 const MAX_ATTEMPTS = 3;
 
 const nowIso = () => new Date().toISOString();
@@ -39,6 +39,14 @@ export async function runWorker(opts: { userId?: string; deadline?: number } = {
       stats.stepsRun++;
     } catch (e) {
       stats.errors++;
+      if (e instanceof RateLimitError) {
+        // Geen echte fout: de taak wacht tot de limiet voorbij is, zonder poging te verbruiken.
+        await db.from("dot_tasks")
+          .update({ locked_until: new Date(Date.now() + Math.min(e.retryAfterMs, 30 * 60_000)).toISOString(), error: e.message })
+          .eq("id", task.id).eq("status", "running");
+        await logAudit(db, { userId: task.user_id, actor: "system", action: "rate_limited", taskId: task.id, output: e.message });
+        break; // andere taken lopen nu ook tegen de limiet aan
+      }
       await handleFailure(db, task, e);
     }
   }

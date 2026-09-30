@@ -168,6 +168,7 @@ Zie `.env.example`. Lokaal: kopieer naar `.env.local`. Op Vercel: Project → Se
 | `GROQ_API_KEY` | console.groq.com | |
 | `GROQ_MODEL` | optioneel | default `openai/gpt-oss-120b` |
 | `CRON_SECRET` | zelf verzinnen | lange random string |
+| `GROQ_FALLBACK_MODELS` | optioneel | uitwijkmodellen bij een (dag)limiet, default `openai/gpt-oss-20b` |
 | `GROQ_SEARCH_MODEL` | optioneel | model voor Groq `browser_search`, default `openai/gpt-oss-120b` |
 | `TAVILY_API_KEY` | optioneel | krijgt voorrang bij zoeken; anders Groq `browser_search` |
 | `CAURA_API_KEY` + `CAURA_TENANT_ID` | optioneel, caura.ai | gedeeld geheugen tussen dots/agents (zie hieronder) |
@@ -233,4 +234,4 @@ en een echte verzendkoppeling voor mail.
 
 - `web_search` probeert: Tavily (als er een key is) → Groq `browser_search` (zelfde Groq-key) → DuckDuckGo HTML. Levert geen van drieën bronnen op, dan krijgt de agent een harde fout plus de instructie niets te verzinnen.
 - De SSRF-bescherming van `web_fetch` controleert hostnamen/IP's, maar niet DNS-rebinding.
-- Groq free tier heeft rate limits; bij 429 probeert de client het kort opnieuw, daarna een retry via de worker.
+- Groq free tier: ca. 200k tokens per dag per model. Bij een korte limiet wacht de client even; bij een daglimiet wijkt hij uit naar `GROQ_FALLBACK_MODELS`. Zijn die ook op, dan wachten achtergrondtaken tot de limiet voorbij is (zonder als mislukt te tellen) en meldt de chat hoe lang het nog duurt.

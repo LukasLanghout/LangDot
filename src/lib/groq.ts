@@ -63,7 +63,36 @@ export async function groqRequest(body: Record<string, unknown>): Promise<any> {
   return res.json();
 }
 
-async function post(body: Record<string, unknown>): Promise<Response> {
+/** Limiet van Groq bereikt (bv. tokens per dag). retryAfterMs = hoe lang wachten. */
+export class RateLimitError extends Error {
+  constructor(public retryAfterMs: number, public model: string) {
+    super(
+      `Groq-limiet bereikt voor ${model}. Probeer het over ${Math.max(1, Math.ceil(retryAfterMs / 60_000))} min opnieuw` +
+        ` (of verhoog je limiet op console.groq.com).`,
+    );
+  }
+}
+
+// Uitwijkmodellen hebben op Groq elk een eigen daglimiet. Standaard: het kleinere gpt-oss-model
+// (ondersteunt ook tool use en browser_search).
+const FALLBACK_MODELS = (process.env.GROQ_FALLBACK_MODELS ?? "openai/gpt-oss-20b")
+  .split(",").map((s) => s.trim()).filter(Boolean);
+
+// Per serverless-instantie onthouden welk model tot wanneer op slot zit.
+const exhaustedUntil = new Map<string, number>();
+
+/** Leest de wachttijd uit de header of uit "Please try again in 22m54.6s". */
+function retryAfterMs(res: Response, text: string) {
+  const header = Number(res.headers.get("retry-after"));
+  if (Number.isFinite(header) && header > 0) return header * 1000;
+  const m = text.match(/try again in (?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?/);
+  if (m && (m[1] || m[2] || m[3])) {
+    return ((Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0)) * 60 + Number(m[3] ?? 0)) * 1000;
+  }
+  return 5_000;
+}
+
+async function postOnce(body: Record<string, unknown>, model: string): Promise<Response> {
   const key = process.env.GROQ_API_KEY;
   if (!key) throw new Error("GROQ_API_KEY ontbreekt");
 
@@ -71,19 +100,49 @@ async function post(body: Record<string, unknown>): Promise<Response> {
     const res = await fetch(GROQ_URL, {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, model }),
     });
     if (res.ok) return res;
 
-    // Rate limit / tijdelijke fout: kort wachten en opnieuw.
-    if ((res.status === 429 || res.status >= 500) && attempt < 2) {
-      const retryAfter = Number(res.headers.get("retry-after"));
-      await sleep(Math.min((Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 2) * 1000, 8000));
+    if (res.status === 429) {
+      const text = await res.text();
+      const wait = retryAfterMs(res, text);
+      // Korte limiet (per minuut): even wachten. Lange limiet (per dag): direct opgeven → uitwijkmodel.
+      if (wait <= 10_000 && attempt < 2) {
+        await sleep(wait);
+        continue;
+      }
+      throw new RateLimitError(wait, model);
+    }
+    if (res.status >= 500 && attempt < 2) {
+      await sleep(2000);
       continue;
     }
     throw new GroqError(res.status, await res.text());
   }
   throw new Error("Groq: te veel pogingen");
+}
+
+/** Probeert het gevraagde model en valt bij een limiet terug op de uitwijkmodellen. */
+async function post(body: Record<string, unknown>): Promise<Response> {
+  const primary = String(body.model);
+  const chain = [primary, ...FALLBACK_MODELS.filter((m) => m !== primary)];
+  const available = chain.filter((m) => (exhaustedUntil.get(m) ?? 0) < Date.now());
+
+  let lastLimit: RateLimitError | null = null;
+  for (const model of available) {
+    try {
+      return await postOnce(body, model);
+    } catch (e) {
+      if (!(e instanceof RateLimitError)) throw e;
+      exhaustedUntil.set(model, Date.now() + e.retryAfterMs);
+      lastLimit = e;
+    }
+  }
+  if (lastLimit) throw lastLimit;
+  // Alles staat nog op slot uit een eerdere aanroep.
+  const soonest = Math.min(...chain.map((m) => exhaustedUntil.get(m) ?? Date.now()));
+  throw new RateLimitError(Math.max(soonest - Date.now(), 1000), primary);
 }
 
 function normalizeCalls(calls: ToolCall[]): ToolCall[] {

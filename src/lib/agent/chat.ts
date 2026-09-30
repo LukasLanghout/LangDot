@@ -10,7 +10,10 @@ export type ChatEvent =
   | { t: "done"; id: string | null }
   | { t: "error"; message: string };
 
-const MAX_ROUNDS = 6;
+const MAX_ROUNDS = 5;
+/** Lange oude berichten inkorten: scheelt veel tokens per beurt (Groq free tier = 200k/dag). */
+const MAX_HISTORY_CHARS = 1500;
+const clip = (s: string) => (s.length > MAX_HISTORY_CHARS ? `${s.slice(0, MAX_HISTORY_CHARS)} …[ingekort]` : s);
 
 /** Eén chatbeurt: history laden, tool-loop draaien, tekst live streamen. */
 /**
@@ -26,9 +29,9 @@ function toHistory(rows: { role: string; content: string }[]): ChatMessage[] {
       if (prev?.role === "user") {
         out.push({ role: "assistant", content: "(Op dit bericht is geen antwoord gegeven. Niet meer oppakken tenzij de gebruiker erom vraagt.)" });
       }
-      out.push({ role: "user", content: m.content });
+      out.push({ role: "user", content: clip(m.content) });
     } else {
-      out.push({ role: "assistant", content: m.content });
+      out.push({ role: "assistant", content: clip(m.content) });
     }
   }
   return out;
@@ -50,7 +53,7 @@ export async function runChat(opts: {
     .eq("user_id", userId)
     .neq("id", opts.userMessageId)
     .order("created_at", { ascending: false })
-    .limit(30);
+    .limit(16);
 
   const past = toHistory(((history ?? []) as { role: string; content: string }[]).reverse());
   if (past[past.length - 1]?.role === "user") {

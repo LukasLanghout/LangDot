@@ -5,7 +5,7 @@ import { groqRequest } from "./groq";
 
 const UA = "Mozilla/5.0 (compatible; LangDot/0.1; +https://github.com/)";
 const MAX_BYTES = 1_000_000;
-const MAX_TEXT = 8000;
+const MAX_TEXT = 5000;
 
 async function fetchWithTimeout(url: string, init: RequestInit = {}, ms = 10000) {
   const ctrl = new AbortController();
@@ -198,7 +198,7 @@ async function groqBrowserSearch(query: string): Promise<SearchResponse> {
     tools: [{ type: "browser_search" }],
     tool_choice: "required",
     temperature: 0.1,
-    max_completion_tokens: 1500,
+    max_completion_tokens: 1000,
   });
 
   const msg = json?.choices?.[0]?.message ?? {};
