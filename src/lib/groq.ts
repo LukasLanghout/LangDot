@@ -3,7 +3,7 @@
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
-export const MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
+export const MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
 
 export type ToolCall = {
   id: string;
@@ -73,9 +73,11 @@ export class RateLimitError extends Error {
   }
 }
 
-// Uitwijkmodellen hebben op Groq elk een eigen daglimiet. Standaard: het kleinere gpt-oss-model
-// (ondersteunt ook tool use en browser_search).
-const FALLBACK_MODELS = (process.env.GROQ_FALLBACK_MODELS ?? "openai/gpt-oss-20b")
+/** Model maakte een ongeldige tool-call (komt bij Llama soms voor): probeer het volgende model. */
+class ToolUseFailedError extends GroqError {}
+
+// Uitwijkmodellen hebben op Groq elk een eigen daglimiet.
+const FALLBACK_MODELS = (process.env.GROQ_FALLBACK_MODELS ?? "openai/gpt-oss-120b,openai/gpt-oss-20b")
   .split(",").map((s) => s.trim()).filter(Boolean);
 
 // Per serverless-instantie onthouden welk model tot wanneer op slot zit.
@@ -118,7 +120,9 @@ async function postOnce(body: Record<string, unknown>, model: string): Promise<R
       await sleep(2000);
       continue;
     }
-    throw new GroqError(res.status, await res.text());
+    const text = await res.text();
+    if (res.status === 400 && text.includes("tool_use_failed")) throw new ToolUseFailedError(res.status, text);
+    throw new GroqError(res.status, text);
   }
   throw new Error("Groq: te veel pogingen");
 }
@@ -130,16 +134,22 @@ async function post(body: Record<string, unknown>): Promise<Response> {
   const available = chain.filter((m) => (exhaustedUntil.get(m) ?? 0) < Date.now());
 
   let lastLimit: RateLimitError | null = null;
+  let lastToolError: ToolUseFailedError | null = null;
   for (const model of available) {
     try {
       return await postOnce(body, model);
     } catch (e) {
+      if (e instanceof ToolUseFailedError) {
+        lastToolError = e;
+        continue;
+      }
       if (!(e instanceof RateLimitError)) throw e;
       exhaustedUntil.set(model, Date.now() + e.retryAfterMs);
       lastLimit = e;
     }
   }
   if (lastLimit) throw lastLimit;
+  if (lastToolError) throw lastToolError;
   // Alles staat nog op slot uit een eerdere aanroep.
   const soonest = Math.min(...chain.map((m) => exhaustedUntil.get(m) ?? Date.now()));
   throw new RateLimitError(Math.max(soonest - Date.now(), 1000), primary);
