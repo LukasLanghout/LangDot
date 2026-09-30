@@ -186,11 +186,12 @@ export async function executeTool(ctx: ToolContext, name: string, rawArgs: strin
     output = await run(ctx, name, args);
     forModel = typeof output === "string" ? output : JSON.stringify(output);
   } catch (e) {
-    output = { error: e instanceof Error ? e.message : String(e) };
+    const failure = { error: e instanceof Error ? e.message : String(e) };
+    output = failure;
     forModel = JSON.stringify(
       name === "web_search" || name === "web_fetch"
         ? {
-            ...output,
+            ...failure,
             instruction:
               "Je hebt hierdoor GEEN bronnen. Noem geen namen, adressen, prijzen, cijfers of nieuws uit eigen kennis " +
               "ter vervanging. Zeg eerlijk dat het opzoeken mislukte en bied aan het later opnieuw te proberen.",
