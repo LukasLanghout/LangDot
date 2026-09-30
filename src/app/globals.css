@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #0f0f14;
+  --color-panel: #17171f;
+  --color-panel-2: #1e1e28;
+  --color-line: #2a2a36;
+  --color-fg: #ececf1;
+  --color-muted: #9a9aab;
+  --color-accent: #8b7bff;
+  --color-ok: #3ecf8e;
+  --color-warn: #f5b942;
+  --color-bad: #ff6b6b;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+html,
+body {
+  height: 100%;
+  background: var(--color-bg);
+  color: var(--color-fg);
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-accent) 40%, transparent);
+}
+
+/* Scrollbars rustig houden */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line) transparent;
+}
+
+@keyframes dot-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+@keyframes dot-blink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  95% { transform: scaleY(0.1); }
+}
+.dot-busy { animation: dot-float 1.6s ease-in-out infinite; }
+.dot-eyes { transform-origin: 60px 64px; animation: dot-blink 5s infinite; }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+.typing span { animation: pulse-dot 1.2s infinite; }
+.typing span:nth-child(2) { animation-delay: 0.2s; }
+.typing span:nth-child(3) { animation-delay: 0.4s; }
+
+/* Eenvoudige opmaak voor berichten */
+.msg p + p { margin-top: 0.5rem; }
+.msg a { color: var(--color-accent); text-decoration: underline; word-break: break-all; }
+.msg code { background: var(--color-panel-2); padding: 0 0.25rem; border-radius: 4px; font-size: 0.9em; }
+.msg ul { list-style: disc; padding-left: 1.25rem; margin: 0.25rem 0; }
+.msg hr { border-color: var(--color-line); margin: 0.75rem 0; }
