@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
-import type { AuditEntry, Draft, Memory, Message, Profile, Schedule, Task } from "@/lib/types";
+import type { ActionRow, AuditEntry, Memory, Message, Profile, Schedule, Task } from "@/lib/types";
 import { DotAvatar } from "./DotAvatar";
 import { Chat } from "./Chat";
 import { ActivityPanel } from "./ActivityPanel";
@@ -18,7 +18,7 @@ type Initial = {
   tasks: Task[];
   memories: Memory[];
   schedules: Schedule[];
-  drafts: Draft[];
+  actions: ActionRow[];
   audit: AuditEntry[];
 };
 
@@ -41,11 +41,13 @@ export function AppShell({
   initialProfile,
   initial,
   cauraFleet,
+  gmailStatus,
 }: {
   userId: string;
   initialProfile: Profile;
   initial: Initial;
   cauraFleet: string | null;
+  gmailStatus: "active" | "needs_reauth" | "none";
 }) {
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
@@ -55,7 +57,7 @@ export function AppShell({
   const [tasks, setTasks] = useState(initial.tasks);
   const [memories, setMemories] = useState(initial.memories);
   const [schedules, setSchedules] = useState(initial.schedules);
-  const [drafts, setDrafts] = useState(initial.drafts);
+  const [actions, setActions] = useState(initial.actions);
   const [audit, setAudit] = useState(initial.audit);
   const [tab, setTab] = useState<Tab>("activity");
   const [mobileView, setMobileView] = useState<"chat" | "panel">("chat");
@@ -87,10 +89,10 @@ export function AppShell({
           p.eventType === "DELETE"
             ? setSchedules((l) => l.filter((x) => x.id !== p.old.id))
             : setSchedules((l) => upsert(l, p.new as Schedule, byCreatedAsc)),
-        dot_drafts: (p) =>
+        pending_actions: (p) =>
           p.eventType === "DELETE"
-            ? setDrafts((l) => l.filter((x) => x.id !== p.old.id))
-            : setDrafts((l) => upsert(l, p.new as Draft, byCreatedDesc, 100)),
+            ? setActions((l) => l.filter((x) => x.id !== p.old.id))
+            : setActions((l) => upsert(l, p.new as ActionRow, byCreatedDesc, 100)),
         dot_audit: (p) => p.eventType === "INSERT" && setAudit((l) => upsert(l, p.new as AuditEntry, byCreatedDesc, 200)),
         dot_profiles: (p) => p.eventType === "UPDATE" && setProfile((old) => ({ ...old, ...(p.new as Profile) })),
       };
@@ -185,6 +187,9 @@ export function AppShell({
           >
             {profile.paused ? "▶ Hervatten" : "⏸ Pauzeren"}
           </button>
+          <Link href="/connections" className="hidden lg:block text-center rounded-lg px-3 py-1.5 text-sm border border-line hover:bg-panel-2">
+            Verbindingen
+          </Link>
           <Link href="/create" className="hidden lg:block text-center rounded-lg px-3 py-1.5 text-sm border border-line hover:bg-panel-2">
             Uiterlijk aanpassen
           </Link>
@@ -211,7 +216,7 @@ export function AppShell({
       </div>
 
       <main className={`flex-1 min-w-0 min-h-0 ${mobileView === "chat" ? "flex" : "hidden"} lg:flex flex-col`}>
-        <Chat profile={profile} messages={messages} tasks={tasks} onMessage={upsertMessage} />
+        <Chat profile={profile} messages={messages} tasks={tasks} actions={actions} onMessage={upsertMessage} />
       </main>
 
       <section className={`lg:w-[420px] shrink-0 min-h-0 border-l border-line bg-panel ${mobileView === "panel" ? "flex" : "hidden"} lg:flex flex-col flex-1 lg:flex-none`}>
@@ -229,13 +234,19 @@ export function AppShell({
             </button>
           ))}
         </nav>
+        {gmailStatus === "needs_reauth" && (
+          <Link href="/connections" className="block mx-3 mt-3 rounded-lg border border-warn/40 bg-warn/10 text-warn text-sm px-3 py-2">
+            Je Gmail-verbinding is verlopen. Klik hier om opnieuw te verbinden.
+          </Link>
+        )}
         <div className="flex-1 min-h-0 overflow-y-auto p-3">
-          {tab === "activity" && <ActivityPanel tasks={tasks} drafts={drafts} paused={profile.paused} />}
+          {tab === "activity" && <ActivityPanel tasks={tasks} actions={actions} paused={profile.paused} />}
           {tab === "memory" && <MemoryPanel memories={memories} cauraFleet={cauraFleet} />}
           {tab === "scheduled" && <SchedulePanel userId={userId} schedules={schedules} />}
           {tab === "audit" && <AuditPanel entries={audit} />}
         </div>
         <div className="lg:hidden flex gap-3 justify-center p-2 border-t border-line text-sm">
+          <Link href="/connections" className="text-muted hover:text-fg">Verbindingen</Link>
           <Link href="/create" className="text-muted hover:text-fg">Uiterlijk</Link>
           <button onClick={logout} className="text-muted hover:text-fg">Uitloggen</button>
         </div>

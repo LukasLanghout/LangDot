@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import type { Draft, Task } from "@/lib/types";
+import type { ActionRow, Task } from "@/lib/types";
 import { Markdown, QuestionOptions, StatusBadge, formatTime } from "./ui";
+import { ApprovalCard } from "./ApprovalCard";
 
 function StepIcon({ status }: { status: string }) {
   if (status === "done") return <span className="text-ok">✓</span>;
@@ -10,35 +11,7 @@ function StepIcon({ status }: { status: string }) {
   return <span className="text-muted">○</span>;
 }
 
-function DraftCard({ draft }: { draft: Draft }) {
-  const [copied, setCopied] = useState(false);
-  const badge = draft.status === "approved"
-    ? "bg-ok/15 text-ok"
-    : draft.status === "rejected" ? "bg-bad/15 text-bad" : "bg-line text-muted";
-  const label = draft.status === "approved" ? "goedgekeurd — verstuur zelf" : draft.status === "rejected" ? "afgewezen" : "concept";
-
-  async function copy() {
-    const text = [draft.subject ? `Onderwerp: ${draft.subject}` : "", draft.body].filter(Boolean).join("\n\n");
-    await navigator.clipboard.writeText(text).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }
-
-  return (
-    <div className="mt-2 rounded-lg border border-line bg-bg/40 p-2.5 text-sm">
-      <div className="flex items-center gap-2 mb-1">
-        <span className="text-[11px] uppercase tracking-wide text-muted">✉ {draft.channel}</span>
-        <span className={`text-[11px] px-1.5 rounded-full ${badge}`}>{label}</span>
-        <button onClick={copy} className="ml-auto text-[11px] text-muted hover:text-fg">{copied ? "gekopieerd" : "kopieer"}</button>
-      </div>
-      {draft.recipient && <div className="text-xs text-muted">Aan: {draft.recipient}</div>}
-      {draft.subject && <div className="text-xs text-muted">Onderwerp: {draft.subject}</div>}
-      <div className="mt-1 whitespace-pre-wrap text-[13px] max-h-40 overflow-y-auto">{draft.body}</div>
-    </div>
-  );
-}
-
-function TaskCard({ task, drafts }: { task: Task; drafts: Draft[] }) {
+function TaskCard({ task, actions }: { task: Task; actions: ActionRow[] }) {
   const active = task.status === "pending" || task.status === "running" || task.status === "needs_input";
   const [open, setOpen] = useState(active);
   const [cancelling, setCancelling] = useState(false);
@@ -58,6 +31,7 @@ function TaskCard({ task, drafts }: { task: Task; drafts: Draft[] }) {
         <button onClick={() => setOpen((o) => !o)} className="flex-1 min-w-0 text-left">
           <div className="font-medium text-sm leading-snug">
             {task.source === "schedule" && <span title="Geplande check-in">📅 </span>}
+            {task.source === "chat_turn" && <span title="Vanuit de chat">💬 </span>}
             {task.title}
           </div>
           <div className="text-[11px] text-muted mt-0.5">
@@ -74,12 +48,17 @@ function TaskCard({ task, drafts }: { task: Task; drafts: Draft[] }) {
         </div>
       )}
 
-      {task.status === "needs_input" && task.question && (
+      {task.status === "needs_input" && task.question && !task.pending_action && (
         <div className="mt-3 text-sm">
           <div className="font-medium">{task.question}</div>
           <QuestionOptions task={task} />
         </div>
       )}
+
+      {/* Mails die op goedkeuring wachten: altijd zichtbaar, ook als de kaart is ingeklapt. */}
+      {actions.filter((a) => a.status === "pending").map((a) => (
+        <div key={a.id} className="mt-3"><ApprovalCard action={a} /></div>
+      ))}
 
       {open && (
         <div className="mt-3 space-y-2 text-sm">
@@ -96,7 +75,7 @@ function TaskCard({ task, drafts }: { task: Task; drafts: Draft[] }) {
               </li>
             ))}
           </ol>
-          {drafts.map((d) => <DraftCard key={d.id} draft={d} />)}
+          {actions.filter((a) => a.status !== "pending").map((a) => <ApprovalCard key={a.id} action={a} />)}
           {task.result && (
             <div className="rounded-lg bg-bg/40 border border-line p-2.5 text-[13px]">
               <Markdown text={task.result} />
@@ -117,11 +96,11 @@ function TaskCard({ task, drafts }: { task: Task; drafts: Draft[] }) {
   );
 }
 
-export function ActivityPanel({ tasks, drafts, paused }: { tasks: Task[]; drafts: Draft[]; paused: boolean }) {
+export function ActivityPanel({ tasks, actions, paused }: { tasks: Task[]; actions: ActionRow[]; paused: boolean }) {
   const order = { needs_input: 0, running: 1, pending: 2 } as Record<string, number>;
   const active = tasks.filter((t) => t.status in order).sort((a, b) => order[a.status] - order[b.status]);
   const finished = tasks.filter((t) => !(t.status in order));
-  const draftsByTask = (id: string) => drafts.filter((d) => d.task_id === id);
+  const actionsByTask = (id: string) => actions.filter((a) => a.task_id === id);
 
   return (
     <div className="space-y-4">
@@ -135,13 +114,13 @@ export function ActivityPanel({ tasks, drafts, paused }: { tasks: Task[]; drafts
         {active.length === 0 ? (
           <p className="text-sm text-muted">Geen lopende taken. Geef je dot een opdracht in de chat.</p>
         ) : (
-          <div className="space-y-2">{active.map((t) => <TaskCard key={t.id} task={t} drafts={draftsByTask(t.id)} />)}</div>
+          <div className="space-y-2">{active.map((t) => <TaskCard key={t.id} task={t} actions={actionsByTask(t.id)} />)}</div>
         )}
       </section>
       {finished.length > 0 && (
         <section>
           <h2 className="text-xs uppercase tracking-wide text-muted mb-2">Afgerond</h2>
-          <div className="space-y-2">{finished.map((t) => <TaskCard key={t.id} task={t} drafts={draftsByTask(t.id)} />)}</div>
+          <div className="space-y-2">{finished.map((t) => <TaskCard key={t.id} task={t} actions={actionsByTask(t.id)} />)}</div>
         </section>
       )}
     </div>

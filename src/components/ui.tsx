@@ -57,13 +57,13 @@ export function QuestionOptions({ task }: { task: Task }) {
   return (
     <div className="mt-2 space-y-2">
       <div className="flex flex-wrap gap-2">
-        {(task.options ?? []).map((o) => (
+        {(task.options ?? []).map((o, i) => (
           <button
             key={o.label}
             disabled={busy}
             onClick={() => answer(o.label)}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-50 ${
-              o.approves ? "bg-accent text-white hover:brightness-110" : "border border-line hover:bg-panel-2"
+              i === 0 ? "bg-accent text-white hover:brightness-110" : "border border-line hover:bg-panel-2"
             }`}
           >
             {o.label}
@@ -84,7 +84,7 @@ export function QuestionOptions({ task }: { task: Task }) {
           <input
             value={custom}
             onChange={(e) => setCustom(e.target.value)}
-            placeholder="Typ je antwoord (telt niet als goedkeuring)"
+            placeholder="Typ je antwoord"
             className="flex-1 min-w-0 rounded-lg bg-panel-2 border border-line px-3 py-1.5 text-sm outline-none focus:border-accent"
           />
           <button disabled={busy} className="rounded-lg border border-line px-3 text-sm hover:bg-panel-2">Stuur</button>

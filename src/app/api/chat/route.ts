@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { runChat, type ChatEvent } from "@/lib/agent/chat";
 import { runWorker } from "@/lib/agent/worker";
 import { logAudit } from "@/lib/audit";
+import { LlmError, userSafeMessage } from "@/lib/llm-errors";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -23,7 +24,10 @@ export async function POST(req: Request) {
     .insert({ user_id: user.id, role: "user", content: message })
     .select("id")
     .single();
-  if (error) return Response.json({ error: error.message }, { status: 500 });
+  if (error) {
+    console.error("[chat] bericht opslaan mislukt", error.message);
+    return Response.json({ error: "Je bericht kon niet worden opgeslagen." }, { status: 500 });
+  }
   await logAudit(db, { userId: user.id, actor: "user", action: "chat_message", input: message.slice(0, 500) });
 
   // Na de chat (en na het sluiten van de stream) de worker aftrappen als er een taak is aangemaakt.
@@ -51,19 +55,22 @@ export async function POST(req: Request) {
         const text = result.text.trim() || "…";
         const { data: reply } = await db
           .from("dot_messages")
-          .insert({ user_id: user.id, role: "assistant", content: text })
+          .insert({ user_id: user.id, role: "assistant", content: text, reply_to: saved.id, meta: result.meta ?? {} })
           .select("id")
           .single();
-        send({ t: "done", id: reply?.id ?? null });
+        send({ t: "done", id: reply?.id ?? null, meta: result.meta });
       } catch (e) {
-        console.error("chat failed", e);
-        const reason = e instanceof Error ? e.message : "Er ging iets mis";
-        send({ t: "error", message: reason });
+        // Details alleen in de serverlog; de gebruiker krijgt een nette melding zonder API-fouten of modelnamen.
+        console.error("[chat] mislukt:", e instanceof LlmError ? `${e.kind}: ${e.detail}` : e);
+        const safe = userSafeMessage(e);
+        send({ t: "error", message: safe });
         // Ook een mislukt antwoord opslaan, zodat vraag en antwoord in de history gepaard blijven.
         await db.from("dot_messages").insert({
           user_id: user.id,
           role: "assistant",
-          content: `⚠ Mijn antwoord op dit bericht is mislukt door een technische fout (${reason.slice(0, 200)}).`,
+          content: `⚠ ${safe}`,
+          reply_to: saved.id,
+          meta: { kind: "error" },
         });
       } finally {
         try {

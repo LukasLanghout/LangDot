@@ -10,9 +10,35 @@ export type Step = {
   qa?: QA[];
 };
 
-export type Option = { label: string; approves: boolean };
+/** Antwoordoptie van een keuzevraag (ask_user). Keuzevragen keuren nooit iets goed. */
+export type Option = { label: string };
 
-export type PendingAction = { type: "approve_draft"; draft_id: string } | null;
+/** Koppeling van een taak aan een actie die op goedkeuring wacht. */
+export type PendingAction = { type: "gmail_send"; action_id: string } | null;
+
+export type ActionRow = {
+  id: string;
+  user_id: string;
+  task_id: string | null;
+  type: "gmail_send";
+  payload: { to: string[]; subject: string; body: string; gmail_draft_id?: string | null };
+  status: "pending" | "approved" | "rejected" | "executed" | "expired";
+  error: string | null;
+  result: Record<string, unknown> | null;
+  created_at: string;
+  decided_at: string | null;
+  executed_at: string | null;
+};
+
+export type ConnectorRow = {
+  id: string;
+  provider: string;
+  account_email: string | null;
+  scopes: string[];
+  status: "active" | "needs_reauth" | "revoked";
+  last_used_at: string | null;
+  created_at: string;
+};
 
 export type Profile = {
   user_id: string;
@@ -44,6 +70,7 @@ export type Task = {
   source: string;
   schedule_id: string | null;
   attempts: number;
+  step_count?: number;
   locked_until: string | null;
   created_at: string;
   updated_at: string;
@@ -55,7 +82,13 @@ export type Message = {
   role: "user" | "assistant";
   content: string;
   task_id: string | null;
-  meta: { kind?: "question" | "task_done" | "task_failed" | "answer"; options?: Option[] } | null;
+  reply_to?: string | null;
+  meta: {
+    kind?: "question" | "task_done" | "task_failed" | "answer" | "approval" | "connect" | "error";
+    options?: Option[];
+    action_ids?: string[];
+    provider?: string;
+  } | null;
   created_at: string;
 };
 
@@ -81,18 +114,6 @@ export type Schedule = {
   active: boolean;
   next_run_at: string | null;
   last_run_at: string | null;
-  created_at: string;
-};
-
-export type Draft = {
-  id: string;
-  user_id: string;
-  task_id: string | null;
-  channel: string;
-  recipient: string | null;
-  subject: string | null;
-  body: string;
-  status: "draft" | "approved" | "rejected";
   created_at: string;
 };
 

@@ -13,14 +13,13 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   const { data } = await db.from("dot_tasks")
     .update({ status: "cancelled", locked_until: null, updated_at: new Date().toISOString() })
     .eq("id", id).eq("user_id", user.id).in("status", ["pending", "running", "needs_input"])
-    .select("id, title, pending_action").maybeSingle();
+    .select("id, title").maybeSingle();
   if (!data) return Response.json({ error: "Geen actieve taak" }, { status: 404 });
 
-  // Een openstaand concept vervalt met de taak.
-  if (data.pending_action?.type === "approve_draft") {
-    await db.from("dot_drafts").update({ status: "rejected" })
-      .eq("id", data.pending_action.draft_id).eq("user_id", user.id).eq("status", "draft");
-  }
+  // Mails van deze taak die nog op goedkeuring wachten, vervallen met de taak.
+  await db.from("pending_actions").update({ status: "rejected", decided_at: new Date().toISOString() })
+    .eq("task_id", id).eq("user_id", user.id).eq("status", "pending");
+
   await logAudit(db, { userId: user.id, actor: "user", action: "task_cancelled", taskId: id, input: { title: data.title } });
   return Response.json({ ok: true });
 }

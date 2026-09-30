@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { Message, Profile, Task } from "@/lib/types";
+import type { ActionRow, Message, Profile, Task } from "@/lib/types";
 import { DotAvatar } from "./DotAvatar";
 import { Markdown, QuestionOptions, StatusBadge, formatTime } from "./ui";
+import { ApprovalCard } from "./ApprovalCard";
 
 const TOOL_LABELS: Record<string, string> = {
   web_search: "zoekt op het web",
@@ -13,20 +14,44 @@ const TOOL_LABELS: Record<string, string> = {
   create_task: "maakt een taak",
   cancel_task: "annuleert een taak",
   create_schedule: "plant een check-in",
-  draft_message: "schrijft een concept",
+  gmail_create_draft: "stelt een mail op",
+  gmail_send: "verstuurt een goedgekeurde mail",
+  gmail_search: "doorzoekt je mail",
+  gmail_read: "leest een mail",
+  request_connection: "vraagt om een verbinding",
 };
 
 type Streaming = { text: string; tools: string[]; error?: string };
+
+/**
+ * Chronologisch, maar een antwoord staat altijd direct onder het bericht waar het bij hoort
+ * (reply_to), ook als er intussen andere berichten (bv. van achtergrondtaken) zijn binnengekomen.
+ */
+function orderMessages(messages: Message[]) {
+  const ids = new Set(messages.map((m) => m.id));
+  const replies = new Map<string, Message[]>();
+  for (const m of messages) {
+    if (m.reply_to && ids.has(m.reply_to)) replies.set(m.reply_to, [...(replies.get(m.reply_to) ?? []), m]);
+  }
+  const out: Message[] = [];
+  for (const m of messages) {
+    if (m.reply_to && ids.has(m.reply_to)) continue;
+    out.push(m, ...(replies.get(m.id) ?? []));
+  }
+  return out;
+}
 
 export function Chat({
   profile,
   messages,
   tasks,
+  actions,
   onMessage,
 }: {
   profile: Profile;
   messages: Message[];
   tasks: Task[];
+  actions: ActionRow[];
   onMessage: (m: Message) => void;
 }) {
   const [input, setInput] = useState("");
@@ -40,6 +65,8 @@ export function Chat({
   }, [messages.length, streaming?.text, streaming?.tools.length]);
 
   const taskById = new Map(tasks.map((t) => [t.id, t]));
+  const actionById = new Map(actions.map((a) => [a.id, a]));
+  const ordered = orderMessages(messages);
   // Toon knoppen alleen bij de laatste vraag van een taak die nog op antwoord wacht.
   const lastQuestionId = new Map<string, string>();
   for (const m of messages) if (m.meta?.kind === "question" && m.task_id) lastQuestionId.set(m.task_id, m.id);
@@ -51,6 +78,7 @@ export function Chat({
     setStreaming({ text: "", tools: [] });
     const now = () => new Date().toISOString();
     let full = "";
+    let userMessageId: string | null = null;
 
     try {
       const res = await fetch("/api/chat", {
@@ -77,6 +105,7 @@ export function Chat({
           if (!line) continue;
           const ev = JSON.parse(line);
           if (ev.t === "user") {
+            userMessageId = ev.id;
             onMessage({ id: ev.id, user_id: profile.user_id, role: "user", content: text, task_id: null, meta: null, created_at: now() });
           } else if (ev.t === "text") {
             full += ev.d;
@@ -85,7 +114,7 @@ export function Chat({
             setStreaming((s) => (s ? { ...s, tools: [...s.tools, ev.name] } : s));
           } else if (ev.t === "done") {
             if (ev.id) {
-              onMessage({ id: ev.id, user_id: profile.user_id, role: "assistant", content: full.trim() || "…", task_id: null, meta: null, created_at: now() });
+              onMessage({ id: ev.id, user_id: profile.user_id, role: "assistant", content: full.trim() || "…", task_id: null, reply_to: userMessageId, meta: ev.meta ?? null, created_at: now() });
             }
             setStreaming(null);
           } else if (ev.t === "error") {
@@ -126,7 +155,7 @@ export function Chat({
             </div>
           )}
 
-          {messages.map((m) => {
+          {ordered.map((m) => {
             const task = m.task_id ? taskById.get(m.task_id) : undefined;
             const isOpenQuestion =
               m.meta?.kind === "question" && task?.status === "needs_input" && lastQuestionId.get(task.id) === m.id;
@@ -149,12 +178,25 @@ export function Chat({
                   }`}>
                     {task && m.meta?.kind && (
                       <div className="flex items-center gap-2 mb-1 text-[11px] text-muted">
-                        <span>{m.meta.kind === "question" ? "Beslissing nodig" : m.meta.kind === "task_done" ? "Taak afgerond" : "Taak"}</span>
+                        <span>{m.meta.kind === "question" || m.meta.kind === "approval" ? "Beslissing nodig" : m.meta.kind === "task_done" ? "Taak afgerond" : "Taak"}</span>
                         <StatusBadge status={task.status} />
                       </div>
                     )}
                     <Markdown text={m.content} />
                     {isOpenQuestion && task && <QuestionOptions task={task} />}
+                    {(m.meta?.action_ids ?? []).map((id) => {
+                      const a = actionById.get(id);
+                      return a ? <div key={id} className="mt-3"><ApprovalCard action={a} /></div> : null;
+                    })}
+                    {m.meta?.kind === "connect" && (
+                      // Gewone link: de browser moet naar het toestemmingsscherm van Google navigeren.
+                      <a
+                        href="/api/connectors/google/start?provider=gmail"
+                        className="inline-block mt-3 rounded-lg bg-accent text-white px-4 py-2 text-sm font-medium hover:brightness-110"
+                      >
+                        Gmail verbinden
+                      </a>
+                    )}
                   </div>
                   <div className="text-[11px] text-muted mt-1 ml-1">{formatTime(m.created_at)}</div>
                 </div>

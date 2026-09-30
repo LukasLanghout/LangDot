@@ -1,11 +1,11 @@
 # LangDot
 
-Een MVP van een **always-on persoonlijke agent**: één persistente "dot" met een eigen naam en uiterlijk.
+Een **always-on persoonlijke agent**: één persistente "dot" met een eigen naam en uiterlijk.
 Je geeft opdrachten, de dot werkt ze op de achtergrond af, onthoudt context, en benadert je alleen
-als er een beslissing van jou nodig is. Geïnspireerd op het idee van
-[ChatGPT dots](https://learn.chatgpt.com/docs/dots), maar met **Groq** als model-provider (geen OpenAI-key).
+als er een beslissing van jou nodig is. Geïnspireerd op [ChatGPT dots](https://learn.chatgpt.com/docs/dots).
 
-**Stack:** Next.js 15 (App Router) · TypeScript · Tailwind v4 · Supabase (Postgres, Auth, Realtime, pg_cron) · Groq API · Vercel
+**Stack:** Next.js 15 (App Router) · TypeScript · Tailwind v4 · Supabase (Postgres, Auth, Realtime, pg_cron) ·
+GonkaRouter (OpenAI-compatibel, via het `openai`-pakket) · Gmail API · Vercel
 
 ---
 
@@ -14,101 +14,110 @@ als er een beslissing van jou nodig is. Geïnspireerd op het idee van
 | # | Feature | Waar |
 |---|---------|------|
 | 1 | **Dot aanmaken**: naam, vorm, kleur, ogen, accessoire (SVG). Handle `@naam-dot`. Later aanpasbaar. | `/create` |
-| 2 | **Chat** met streaming. Werkt ook terwijl de dot aan taken werkt. | midden |
-| 3 | **Achtergrondtaken**: plan → stappen → uitvoeren. Live status (pending, running, needs_input, done). | Activity |
-| 4 | **Beslismomenten**: `ask_user` zet de taak op `needs_input` met opties. Zonder "ja" geen bijwerkingen. | chat + Activity |
-| 5 | **Geheugen**: de dot schrijft zelf notities; jij kunt ze inzien, bewerken, verwijderen. | Geheugen |
+| 2 | **Chat** met streaming en Markdown (tabellen, lijsten, links). Antwoorden hangen vast aan hun vraag. | midden |
+| 3 | **Taken**: achtergrondtaken (plan → stappen) én chatbeurten met zoek- of mailwerk verschijnen live in Activity. | Activity |
+| 4 | **Goedkeuring**: mails gaan alleen weg na een klik op *Versturen* op een goedkeuringskaart. In code afgedwongen. | chat + Activity |
+| 5 | **Geheugen**: de dot schrijft zelf notities en volgt je voorkeuren; jij kunt ze inzien, bewerken, verwijderen. | Geheugen |
 | 6 | **Geplande check-ins**: "check elke werkdag om 9:00 Amsterdam tijd …" | Gepland |
-| 7 | **Controls**: pauzeren/hervatten, taken annuleren, audit-log van alle acties. | links + Audit-log |
+| 7 | **Controls**: pauzeren, taken annuleren, audit-log, tokenbudget en stappenlimiet. | links + Audit-log |
+| 8 | **Verbindingen**: koppel je eigen Gmail (OAuth, PKCE, versleutelde tokens). Calendar/Drive volgen. | `/connections` |
 
 ---
 
 ## Architectuur
 
 ```
- Browser (Next.js client)                     Vercel (Next.js server)                      Groq
- ┌─────────────────────────┐   POST /api/chat  ┌────────────────────────────┐  tool use  ┌─────────┐
- │ Chat (NDJSON stream)    │ ────────────────▶ │ runChat(): tool-loop        │ ─────────▶ │ LLM     │
- │ Activity / Geheugen /   │                   │  create_task, memory_*,     │ ◀───────── │         │
- │ Gepland / Audit         │                   │  create_schedule, web_*     │            └─────────┘
- │                         │                   │         │ after()                ▲
- │  Supabase Realtime  ◀───┼──────┐            │         ▼                        │
- └─────────────────────────┘      │            │ runWorker(): claim → plan →      │
-                                  │            │   stap uitvoeren → ask_user /    ─┘
-                                  │            │   complete_step → samenvatting  │
-                                  │            └──────────────▲──────────────────┘
-                                  │                           │ POST /api/worker/tick (elke minuut)
-                        ┌─────────┴───────────────────────────┴──────┐
-                        │ Supabase Postgres                           │
-                        │ dot_profiles  dot_tasks  dot_messages       │
-                        │ dot_memories  dot_schedules  dot_drafts     │
-                        │ dot_audit     + RLS + Realtime + pg_cron    │
-                        └─────────────────────────────────────────────┘
+ Browser                                   Vercel (Next.js server)                           GonkaRouter
+ ┌──────────────────────┐ POST /api/chat  ┌──────────────────────────────────┐ lib/llm.ts ┌────────────┐
+ │ Chat (NDJSON stream) │ ──────────────▶ │ runChat(): tool-loop              │ ─────────▶ │ GONKA_MODEL│
+ │ Activity / Geheugen  │                 │  web_*, memory_*, create_task,    │ ◀───────── │ (gepind)   │
+ │ Gepland / Audit      │                 │  gmail_create_draft …             │            └────────────┘
+ │ Goedkeuringskaart ───┼─ POST /api/actions/:id/approve ─▶ executePendingAction() ──▶ Gmail API
+ │ /connections ────────┼─ /api/connectors/google/start ─▶ Google OAuth ─▶ /callback
+ │ Supabase Realtime ◀──┼───┐             │ runWorker(): claim → plan → stap → samenvatting
+ └──────────────────────┘   │             └──────────────▲───────────────────┘
+                            │                            │ POST /api/worker/tick (elke minuut, pg_cron)
+                  ┌─────────┴────────────────────────────┴───────────────┐
+                  │ Supabase Postgres (RLS op alles)                      │
+                  │ dot_profiles dot_tasks dot_messages dot_memories      │
+                  │ dot_schedules dot_audit dot_usage                      │
+                  │ connectors (tokens AES-256-GCM) pending_actions        │
+                  └──────────────────────────────────────────────────────┘
 ```
 
-### Achtergrondwerk: waarom zo?
+### Provider-laag (`src/lib/llm.ts`)
 
-Simpelste opzet die écht blijft doorlopen zonder eigen server:
+De hele app praat alleen met `complete({ messages, tools, toolChoice, onText, userId })`.
 
-1. **Postgres is de queue.** Taken staan in `dot_tasks`. Een worker claimt een taak met een
-   conditionele update op `locked_until` (lock van 2 min), doet één stap, en geeft de lock vrij.
-   Zo kunnen meerdere aanroepen tegelijk draaien zonder dubbel werk.
-2. **Supabase `pg_cron` + `pg_net`** roept elke minuut `POST /api/worker/tick` aan (heartbeat).
-   Dat werkt op het gratis Vercel-plan (Vercel Cron op Hobby mag maar 1×/dag).
-3. **`after()`** (Next.js) trapt de worker meteen af na een chatbericht dat een taak maakt, na een
-   antwoord op een beslisvraag en na "hervatten", zodat je niet op de volgende minuut hoeft te wachten.
-4. **Vangnet:** zolang de app open staat, pingt de browser elke minuut `/api/worker/kick`
-   (handig bij lokaal ontwikkelen, waar pg_cron je laptop niet kan bereiken).
+- **Provider:** GonkaRouter via het officiële `openai`-pakket met `baseURL`. Wisselen = alleen dit bestand.
+- **Model vastgepind:** uitsluitend `GONKA_MODEL`; een uitwijkmodel alleen als jij `GONKA_FALLBACK_MODELS` zet
+  (standaard leeg). Bij het opstarten (`src/instrumentation.ts`) en bij de eerste aanroep controleert `GET /models`
+  dat het model bestaat; anders een duidelijke fout in de serverlog en een nette melding aan de gebruiker.
+  **Strikt:** antwoorden waarvan het geserveerde model (`model`-veld) afwijkt, worden geweigerd.
+- **Fouten:** retry met exponentiële backoff bij 429, 5xx en timeouts (max 3 keer). De gebruiker ziet nooit
+  ruwe API-fouten of modelnamen (`LlmError.message` is altijd een nette tekst); details alleen in de serverlog.
+- **Streaming:** ja, inclusief tool-calls in delta's en `usage` aan het eind (`stream_options.include_usage`).
+- **Redenering verbergen:** `<think>`-blokken worden weggefilterd, ook tijdens streaming (zie hieronder).
+- **Budget:** per gebruiker per dag (`DAILY_TOKEN_BUDGET`), bijgehouden met de `usage`-velden in `dot_usage`.
+  Per achtergrondtaak maximaal `MAX_TASK_STEPS` LLM-aanroepen.
 
-Elke worker-aanroep heeft een tijdsbudget (~50 s) en doet stappen tot dat op is; de rest gaat in de volgende tick.
-Supabase Edge Functions waren een alternatief, maar dan leeft de agent-code op twee plekken (Deno + Node).
+#### Testresultaat GonkaRouter (30-09-2026)
 
-### Agent-loop
+| Check | Resultaat |
+|---|---|
+| `GET /models` | `zai-org/GLM-5.3-Flash`, `MiniMaxAI/MiniMax-M2.7`, `deepseek-ai/DeepSeek-V4-Flash-0731` |
+| Tool calling (3×) | ✅ OpenAI-vorm (`tool_calls` in `choices[0].message`), geldige JSON-argumenten |
+| Tool-resultaat terug → antwoord | ✅ |
+| Geforceerde `tool_choice` | ✅ |
+| Streaming (ook met tools) + `usage` | ✅ |
+| **Model-routing** | ⚠ `zai-org/GLM-5.3-Flash` wordt geserveerd door `MiniMaxAI/MiniMax-M2.7`. Daarom is `GONKA_MODEL=MiniMaxAI/MiniMax-M2.7` met strikte controle. |
+| **Redenering in content** | ⚠ zonder tools `<think>…</think>`; mét tools ontbreekt `</think>` en scheiden 3 regelovergangen redenering en antwoord. Het filter vangt beide. |
+| Hallucinatie (verzonnen bedrijf, zoeken levert niets op) | ✅ model zoekt, zegt eerlijk dat het niets vond, noemt geen adres/telefoon/omzet |
+
+Zelf opnieuw draaien (Windows, zonder Node): `scripts/test-tool-calling.ps1`, `scripts/test-streaming.ps1`,
+`scripts/check-served-model.ps1`, `scripts/test-hallucination.ps1`, `scripts/inspect-think.ps1`.
+Ze lezen `.env.local` en printen de key nooit.
+
+### Achtergrondwerk
+
+1. **Postgres is de queue.** Taken in `dot_tasks`, geclaimd met een conditionele update op `locked_until`.
+2. **Supabase `pg_cron` + `pg_net`** roept elke minuut `POST /api/worker/tick` aan (werkt op Vercel Hobby).
+3. **`after()`** trapt de worker meteen af na een nieuwe taak, een antwoord, een goedkeuring of "hervatten".
+4. **Vangnet:** zolang de app open staat, pingt de browser elke minuut `/api/worker/kick`.
+
+Chatbeurten met zoek- of mailwerk worden als taak met `source = 'chat_turn'` in Activity getoond; de worker
+voert die nooit uit.
+
+### Goedkeuring (in code afgedwongen)
 
 ```
-nieuwe taak (pending)
-   │ claim
-   ▼
-planTask  ── set_plan (geforceerde tool call) ──▶ 1–6 stappen
-   │
-   ▼
-executeStep(i)  ── tool-loop (max 8 rondes) ──┬─ complete_step → stap i klaar → volgende stap
-   ▲                                          ├─ ask_user → needs_input + vraag in chat (lock vrij)
-   │ antwoord via /api/tasks/:id/answer ──────┘
-   ▼
-finalizeTask ── samenvatting ──▶ bericht in chat, status done
+agent: gmail_create_draft ─▶ pending_actions (status pending) ─▶ goedkeuringskaart (chat + Activity)
+                                                                     │ klik "Versturen" (ingelogde eigenaar)
+                                                                     ▼
+                       approveAction(): pending → approved   (enige plek, alleen via /api/actions/:id/approve)
+                                                                     ▼
+                       executePendingAction(): eigenaar? approved? niet al verstuurd? daglimiet? ontvangers?
+                         claimt atomisch approved → executed, verstuurt, logt ontvanger + onderwerp + tijd
 ```
 
-Tussen elke tool-ronde checkt de worker of de taak geannuleerd of gepauzeerd is.
-Mislukt een stap, dan volgt een retry na 60 s; na 3 pogingen gaat de taak op `failed` en krijg je een bericht.
-
-### Tools
-
-| Tool | Chat | Worker | Effect |
-|------|:----:|:------:|--------|
-| `web_search`, `web_fetch` | ✓ | ✓ | alleen lezen; output verpakt als `<untrusted_web_content>` |
-| `memory_read`, `memory_write` | ✓ | ✓ | eigen geheugen-tabel |
-| `create_task`, `cancel_task` | ✓ | | taakqueue |
-| `create_schedule` | ✓ | | schema's |
-| `draft_message` | ✓ | ✓ | **alleen concept**, verstuurt nooit |
-| `update_task` | | ✓ | voortgangsnotitie |
-| `ask_user` | | ✓ | beslisvraag, pauzeert de taak |
-| `complete_step` | | ✓ | rondt stap af |
+- `gmail_send` roept dezelfde `executePendingAction()` aan. Het model kan dus niets versturen door te beweren
+  dat de gebruiker "ja" zei: de status moet `approved` zijn, en dat kan alleen een klik.
+- De kaart laat je aan, onderwerp en tekst bewerken; wat je goedkeurt is wat verstuurd wordt.
+- Mislukt versturen na goedkeuring (bv. verbinding verlopen), dan blijft de actie `approved` met een
+  "Opnieuw proberen"-knop. Concepten die 7 dagen niet beoordeeld zijn, verlopen.
+- Limieten: `MAX_EMAILS_PER_DAY` (20) en `MAX_RECIPIENTS_PER_EMAIL` (5).
+- Zonder actieve Gmail-verbinding of bij `needs_reauth` krijgt het model de mail-tools niet; alleen
+  `request_connection`, dat een knop "Gmail verbinden" in de chat zet.
 
 ### Veiligheid
 
-- **Geen tools met extern effect.** Er is geen verzend-, verwijder- of betaaltool. `draft_message` maakt een concept.
-- **Goedkeuring** loopt via `ask_user`. Alleen een klik op een optie met `approves: true` telt als "ja";
-  vrije tekst nooit. Een goedgekeurd concept krijgt status *goedgekeurd — verstuur zelf* (er is in deze
-  versie bewust geen verzendkoppeling). Een latere koppeling hoort precies op dat punt in
-  `/api/tasks/[id]/answer` te komen.
-- **Prompt injection:** web-inhoud gaat als data het model in, gemarkeerd als onbetrouwbaar, en de
-  systeemprompt verbiedt het opvolgen van instructies daarin. `web_fetch` blokkeert lokale/private adressen
-  en volgt redirects handmatig.
-- **Audit:** elke tool-call (input + output, afgekapt) en elke gebruikersactie gaat naar `dot_audit`.
-  Gebruikers kunnen het log lezen en aanvullen, niet wijzigen of wissen (RLS).
-- **RLS** op alle tabellen: de browser ziet alleen eigen rijen. De server gebruikt de service-role key en
-  filtert altijd expliciet op `user_id`.
+- Web-, mail- en documentinhoud gaat als `<untrusted_web_content>` het model in; de systeemprompt verbiedt
+  het opvolgen van instructies daarin. Zie de test "prompt-injectie".
+- Hallucinatieregel in de systeemprompt: geen bron = geen feitelijk antwoord, nooit namen/adressen/cijfers verzinnen.
+- Tokens van connectors: AES-256-GCM (`CONNECTOR_ENCRYPTION_KEY`), alleen serverside ontsleuteld. Nooit in logs,
+  frontend of prompt. De browser mag tabel `connectors` alleen zonder tokenkolommen lezen (kolomrechten + RLS).
+- RLS op alle tabellen. `pending_actions` is voor de browser alleen-lezen; statuswijzigingen gaan via routes.
+- Audit-log van elke tool-call, elke gebruikersactie, verbinden/ontkoppelen en elke verstuurde mail.
 
 ---
 
@@ -116,27 +125,29 @@ Mislukt een stap, dan volgt een retry na 60 s; na 3 pogingen gaat de taak op `fa
 
 ```
 supabase/
-  migrations/0001_langdot.sql   schema, RLS, realtime
-  cron.sql                      pg_cron heartbeat (na deploy draaien)
+  migrations/0001_langdot.sql          schema, RLS, realtime
+  migrations/0002_caura.sql            caura_id op geheugennotities
+  migrations/0003_gonka_connectors.sql tokenbudget, connectors, pending_actions, reply_to, step_count
+  cron.sql                             pg_cron heartbeat
 src/
-  middleware.ts                 Supabase-sessie verversen
+  instrumentation.ts                   modelcontrole bij opstarten
   app/
-    page.tsx                    hoofdapp (server: data laden → AppShell)
-    login/  create/             inloggen, dot maken/aanpassen
-    auth/callback/              e-mailbevestiging
-    api/chat                    streaming chat + tool-loop
-    api/worker/tick             cron-heartbeat (Bearer CRON_SECRET)
-    api/worker/kick             aftrap vanuit open app
-    api/tasks/[id]/answer       beslisvraag beantwoorden (+ goedkeuring)
-    api/tasks/[id]/cancel       taak annuleren
-    api/dot/pause               pauzeren / hervatten
+    page.tsx  login/  create/  connections/
+    api/chat                           streaming chat
+    api/actions/[id]/approve|reject|execute   goedkeuringskaart
+    api/connectors/google/start|callback|disconnect   OAuth
+    api/tasks/[id]/answer|cancel  api/dot/pause  api/memories  api/worker/tick|kick
   lib/
-    groq.ts                     Groq client (fetch, streaming, tool calls)
-    agent/                      prompts, tools, chat-loop, worker
-    web.ts                      web_search / web_fetch
-    schedule.ts                 volgende uitvoertijd (luxon, tijdzones/DST)
-    audit.ts  types.ts  supabase/
-  components/                   AppShell, Chat, ActivityPanel, MemoryPanel, SchedulePanel, AuditPanel, DotAvatar, DotEditor
+    llm.ts  llm-errors.ts  budget.ts   provider-laag, fouten, tokenbudget
+    actions.ts  actions-store.ts       pending actions + afgedwongen goedkeuring
+    crypto.ts                          AES-256-GCM
+    connectors/                        registry, oauth-state (PKCE), google, gmail, store
+    agent/                             prompts, tools, mail-tools, chat, worker, approval-flow
+    web.ts  schedule.ts  caura.ts  audit.ts  types.ts  supabase/
+  components/                          AppShell, Chat, ApprovalCard, ActivityPanel, ConnectionsView, …
+tests/                                 vitest
+scripts/                               PowerShell-checks tegen GonkaRouter
+.github/workflows/ci.yml               typecheck + tests + build bij elke push
 ```
 
 ---
@@ -145,93 +156,121 @@ src/
 
 ### 1. Supabase
 
-1. Maak een project (of gebruik een bestaand project: alle tabellen hebben prefix `dot_`).
-2. Plak `supabase/migrations/0001_langdot.sql` in de **SQL Editor** en voer uit.
-3. **Authentication → Providers → Email**: aan. Voor snel testen kun je "Confirm email" uitzetten;
-   laat je het aan, zet dan onder **URL Configuration** je Vercel-URL als Site URL en voeg
-   `https://<jouw-app>/auth/callback` toe aan de Redirect URLs.
+Voer in de **SQL Editor** in volgorde uit: `0001_langdot.sql`, `0002_caura.sql`, `0003_gonka_connectors.sql`.
+Zet onder **Authentication → URL Configuration** je Vercel-URL als Site URL en voeg
+`https://<jouw-app>/auth/callback` toe aan de Redirect URLs.
 
-### 2. Groq
+### 2. Environment variables
 
-Maak een key op <https://console.groq.com/keys>. Standaardmodel: `openai/gpt-oss-20b`, met
-`openai/gpt-oss-120b` als uitwijk. Llama-modellen zijn op Groq inmiddels Enterprise-only; een onbeschikbaar model wordt automatisch overgeslagen. Aanpasbaar via `GROQ_MODEL` en `GROQ_FALLBACK_MODELS`.
+Zie `.env.example` (alle waarden leeg). Lokaal: kopieer naar `.env.local`. Op Vercel: Settings → Environment Variables.
 
-### 3. Environment variables
+| Variabele | Verplicht | Opmerking |
+|-----------|:--:|-----------|
+| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | ✓ | publiek; RLS beschermt de data |
+| `SUPABASE_SERVICE_ROLE_KEY` | ✓ | alleen server |
+| `GONKA_API_KEY` | ✓ | alleen server |
+| `GONKA_BASE_URL` | | default `https://api.gonkarouter.io/v1` |
+| `GONKA_MODEL` | | default `MiniMaxAI/MiniMax-M2.7` (zie testresultaat) |
+| `GONKA_FALLBACK_MODELS` | | standaard leeg = nooit een ander model |
+| `DAILY_TOKEN_BUDGET` | | default 200000 per gebruiker per dag |
+| `MAX_TASK_STEPS` | | default 25 LLM-aanroepen per taak |
+| `MAX_EMAILS_PER_DAY`, `MAX_RECIPIENTS_PER_EMAIL` | | default 20 en 5 |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | voor Gmail | zie "Gmail koppelen" |
+| `GOOGLE_REDIRECT_URI` | | default `<origin>/api/connectors/google/callback` |
+| `CONNECTOR_ENCRYPTION_KEY` | voor Gmail | 32 bytes, base64 of hex |
+| `CRON_SECRET` | ✓ | voor de pg_cron heartbeat |
+| `TAVILY_API_KEY` | | betere web_search |
+| `CAURA_API_KEY`, `CAURA_TENANT_ID`, `CAURA_FLEET_PREFIX` | | gedeeld geheugen (zie onder) |
 
-Zie `.env.example`. Lokaal: kopieer naar `.env.local`. Op Vercel: Project → Settings → Environment Variables.
+Alleen `NEXT_PUBLIC_SUPABASE_URL` en `NEXT_PUBLIC_SUPABASE_ANON_KEY` zijn publiek; een test bewaakt dat.
 
-| Variabele | Waar vandaan | Opmerking |
-|-----------|--------------|-----------|
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase → Settings → API | |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | idem (anon of `sb_publishable_…`) | publiek, RLS beschermt |
-| `SUPABASE_SERVICE_ROLE_KEY` | idem (service_role / `sb_secret_…`) | **alleen server** |
-| `GROQ_API_KEY` | console.groq.com | |
-| `GROQ_MODEL` | optioneel | default `openai/gpt-oss-20b` |
-| `CRON_SECRET` | zelf verzinnen | lange random string |
-| `GROQ_FALLBACK_MODELS` | optioneel | uitwijkmodellen bij een limiet of onbruikbaar model, default `openai/gpt-oss-120b` |
-| `GROQ_SEARCH_MODEL` | optioneel | model voor Groq `browser_search`, default gelijk aan `GROQ_MODEL` |
-| `TAVILY_API_KEY` | optioneel | krijgt voorrang bij zoeken; anders Groq `browser_search` |
-| `CAURA_API_KEY` + `CAURA_TENANT_ID` | optioneel, caura.ai | gedeeld geheugen tussen dots/agents (zie hieronder) |
-| `CAURA_FLEET_PREFIX` | optioneel | fleet = `<prefix>-<user id>`, default `langdot` |
+### 3. Deploy op Vercel
 
-### 4. Lokaal draaien
+Importeer de repo, zet de env vars, deploy. Vul daarna in `supabase/cron.sql` je URL en `CRON_SECRET` in en voer
+het uit in de SQL Editor.
+
+---
+
+## Gmail koppelen
+
+### A. Google Cloud Console
+
+1. Ga naar <https://console.cloud.google.com/> en maak een project (bv. "LangDot").
+2. **APIs & Services → Library** → zoek **Gmail API** → **Enable**.
+3. **APIs & Services → OAuth consent screen** (of "Google Auth Platform → Branding/Audience"):
+   - User type: **External**.
+   - App-naam, support-e-mail en developer-e-mail invullen.
+   - **Scopes** toevoegen: `openid`, `.../auth/userinfo.email`, `.../auth/gmail.send`, `.../auth/gmail.compose`,
+     `.../auth/gmail.readonly`.
+   - **Test users**: voeg elk Gmail-adres toe dat mag koppelen (ook je eigen).
+4. **APIs & Services → Credentials → Create credentials → OAuth client ID**:
+   - Type: **Web application**.
+   - **Authorized redirect URIs**:
+     - `http://localhost:3000/api/connectors/google/callback` (lokaal)
+     - `https://lang-dot.vercel.app/api/connectors/google/callback` (Vercel; gebruik je eigen domein)
+   - Kopieer **Client ID** en **Client secret** naar `GOOGLE_CLIENT_ID` en `GOOGLE_CLIENT_SECRET`.
+5. Maak een encryptiesleutel en zet die in `CONNECTOR_ENCRYPTION_KEY`, bijvoorbeeld in PowerShell:
+   `[Convert]::ToBase64String((1..32 | % { [byte](Get-Random -Max 256) }))`
+   of met Node: `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`.
+   Verander deze sleutel niet meer: bestaande tokens zijn er dan niet meer mee te ontsleutelen (opnieuw verbinden lost dat op).
+
+### B. Beperkingen van de Testing-modus
+
+- Een app in **Testing** mag maximaal **100 testgebruikers** hebben, en alleen die kunnen koppelen.
+- **Refresh tokens verlopen na 7 dagen** in Testing-modus. De dot zet de verbinding dan op *Opnieuw verbinden nodig*
+  en toont een melding; één klik op "Opnieuw verbinden" lost het op.
+- `gmail.readonly` en `gmail.compose` zijn "restricted/sensitive" scopes. Voor publiceren (In production) vraagt Google
+  een verificatie en mogelijk een security assessment. Voor persoonlijk gebruik is Testing-modus voldoende.
+
+### C. In de app
+
+Open **Verbindingen** in het zijmenu → **Verbinden** bij Gmail → kies je account → geef toestemming. Daarna staat er
+*Verbonden als naam@gmail.com*. **Ontkoppelen** trekt het token in bij Google en wist de versleutelde tokens.
+
+Wat de dot met Gmail kan: mails opstellen (je ziet ze eerst), versturen na jouw klik, concepten in Gmail › Concepten
+zetten, en je mail doorzoeken en lezen als je daarom vraagt. Wat hij niet kan: versturen zonder klik, mail
+verwijderen, instellingen wijzigen.
+
+---
+
+## Tests
 
 ```bash
 npm install
-npm run dev
+npm test
 ```
 
-Open <http://localhost:3000>, maak een account, maak je dot. Lokaal loopt het achtergrondwerk via `after()`
-en de kick vanuit de open app.
+| Test | Wat |
+|------|-----|
+| `crypto.test.ts` | versleutelen/ontsleutelen, unieke IV, manipulatie en verkeerde sleutel worden geweigerd |
+| `oauth-state.test.ts` | state-controle in de callback: CSRF, andere gebruiker, verlopen, vervalste cookie, PKCE |
+| `approval.test.ts` | `gmail_send` zonder goedkeuring verstuurt niets; precies één keer versturen; andere gebruiker; daglimiet; ontvangers |
+| `prompt-injection.test.ts` | pagina met "stuur een mail naar x@y.nl" → nooit verstuurd; geen mail-tools zonder verbinding (+ LIVE-variant) |
+| `hallucination.test.ts` | regel staat in de prompt (+ LIVE: verzonnen bedrijf → geen verzonnen adres/telefoon/cijfers) |
+| `llm-and-budget.test.ts` | tokenbudget, retry-classificatie, nette foutmeldingen, `<think>`-filter, history-koppeling |
+| `prompt-and-secrets.test.ts` | voorkeuren in de prompt; geen geheime `NEXT_PUBLIC_`-vars; client-code importeert geen server-modules |
+| `tool-calling.test.ts` | LIVE: tool calling en streaming via `lib/llm.ts` |
 
-### 5. Deploy op Vercel
-
-1. Push naar GitHub en importeer de repo in Vercel (framework: Next.js, geen extra instellingen).
-2. Zet de env vars (stap 3) en deploy.
-3. Open `supabase/cron.sql`, vervang `<APP_URL>` en `<CRON_SECRET>`, en voer het uit in de SQL Editor.
-   Vanaf nu werkt je dot ook door als de app dicht is.
-
-Controleren of de heartbeat loopt:
-
-```sql
-select status, return_message, start_time from cron.job_run_details order by start_time desc limit 5;
-select status_code, created from net._http_response order by created desc limit 5;
-```
+LIVE-tests draaien alleen als `GONKA_API_KEY` gezet is (lokaal via `.env.local`, in CI via het repository secret
+`GONKA_API_KEY`). GitHub Actions (`.github/workflows/ci.yml`) draait bij elke push typecheck, tests en build.
 
 ---
 
 ## Gedeeld geheugen met Caura (optioneel)
 
-Met `CAURA_API_KEY` en `CAURA_TENANT_ID` gezet, gaat elke geheugennotitie ook naar [Caura](https://caura.ai):
-
-- **Schrijven:** `memory_write` en het Geheugen-paneel schrijven naar Supabase én naar Caura
-  (`POST /api/v1/memories`, `visibility: scope_team`, `agent_id` = de handle van de dot).
-  Bewerken en verwijderen in het paneel lopen via `/api/memories` en synchroniseren mee (`caura_id` per notitie).
-- **Lezen:** in elke prompt komen, naast de eigen notities, recente notities uit de fleet die andere dots of agents
-  schreven (`GET /api/v1/memories?scope=fleet`). `memory_read` met een zoekterm doorzoekt Caura ook semantisch
-  (`POST /api/v1/search`).
-- **Fleet:** één per gebruiker, `langdot-<user id>`. Het Geheugen-paneel toont de exacte naam. Laat een andere dot of
-  agent (bv. via Caura's MCP-server in Claude of Cursor) in diezelfde fleet schrijven, en ze leren van elkaar.
-- Is Caura onbereikbaar, dan werkt alles gewoon door op Supabase; fouten komen alleen in de serverlog.
-
-Voer hiervoor ook `supabase/migrations/0002_caura.sql` uit.
-
-## Uitproberen
-
-- *"Zoek 3 goede Italiaanse restaurants in Utrecht en maak een shortlist"* → taak met stappen in Activity.
-- *"Schrijf een mail aan jan@example.com dat ik vrijdag later ben, en vraag of ik hem mag versturen"* →
-  concept + beslisvraag met knoppen. Geen "ja" = er gebeurt niets.
-- *"Check elke werkdag om 9:00 Amsterdam tijd het tech-nieuws voor me"* → schema in Gepland.
-- *"Onthoud dat ik liever korte antwoorden krijg"* → notitie in Geheugen.
-- Klik **Pauzeren** terwijl een taak loopt → de worker stopt na de huidige tool-ronde.
+Met `CAURA_API_KEY` en `CAURA_TENANT_ID` gaat elke geheugennotitie ook naar [Caura](https://caura.ai), in een fleet
+per gebruiker (`langdot-<user id>`, zichtbaar in het Geheugen-paneel). Andere dots of agents in die fleet delen de kennis.
+Is Caura onbereikbaar, dan werkt alles gewoon door op Supabase.
 
 ## Bewust niet in deze versie
 
 Bellen/voice, Slack/Teams, eigen cloud-VM met browser, computer-use, meerdere gebruikers per dot,
-en een echte verzendkoppeling voor mail.
+Google Calendar en Drive (staan als "Binnenkort" op de Verbindingen-pagina).
 
 ## Bekende beperkingen
 
-- `web_search` probeert: Tavily (als er een key is) → Groq `browser_search` (zelfde Groq-key) → DuckDuckGo HTML. Levert geen van drieën bronnen op, dan krijgt de agent een harde fout plus de instructie niets te verzinnen.
-- De SSRF-bescherming van `web_fetch` controleert hostnamen/IP's, maar niet DNS-rebinding.
-- Groq free tier: ca. 200k tokens per dag per model. Bij een korte limiet wacht de client even; bij een daglimiet wijkt hij uit naar `GROQ_FALLBACK_MODELS`. Zijn die ook op, dan wachten achtergrondtaken tot de limiet voorbij is (zonder als mislukt te tellen) en meldt de chat hoe lang het nog duurt.
+- GonkaRouter serveerde bij het testen `GLM-5.3-Flash` als `MiniMax-M2.7`; de strikte modelcontrole weigert zulke
+  afwijkingen, dus kies een model dat de router echt zelf serveert (`scripts/check-served-model.ps1`).
+- Het `<think>`-filter herkent het einde van de redenering zonder sluittag aan 3+ regelovergangen. Bevat de
+  redenering zelf zo'n witregel, dan kan een deel ervan zichtbaar worden.
+- `web_fetch` blokkeert lokale/private adressen, maar niet DNS-rebinding.
