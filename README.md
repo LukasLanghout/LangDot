@@ -20,7 +20,8 @@ GonkaRouter (OpenAI-compatibel, via het `openai`-pakket) · Gmail API · Vercel
 | 5 | **Geheugen**: de dot schrijft zelf notities en volgt je voorkeuren; jij kunt ze inzien, bewerken, verwijderen. | Geheugen |
 | 6 | **Geplande check-ins**: "check elke werkdag om 9:00 Amsterdam tijd …" | Gepland |
 | 7 | **Controls**: pauzeren, taken annuleren, audit-log, tokenbudget en stappenlimiet. | links + Audit-log |
-| 8 | **Verbindingen**: koppel je eigen Gmail (OAuth, PKCE, versleutelde tokens). Calendar/Drive volgen. | `/connections` |
+| 8 | **Verbindingen**: koppel je eigen Gmail en Google Agenda (OAuth, PKCE, versleutelde tokens). Drive volgt. | `/connections` |
+| 9 | **Push-meldingen**: seintje bij een goedkeuring, een vraag, een klare of mislukte taak, of een verlopen verbinding. | 🔔 links |
 
 ---
 
@@ -128,6 +129,7 @@ supabase/
   migrations/0001_langdot.sql          schema, RLS, realtime
   migrations/0002_caura.sql            caura_id op geheugennotities
   migrations/0003_gonka_connectors.sql tokenbudget, connectors, pending_actions, reply_to, step_count
+  migrations/0004_push_calendar.sql    push-abonnementen, actietype calendar_create_event
   cron.sql                             pg_cron heartbeat
 src/
   instrumentation.ts                   modelcontrole bij opstarten
@@ -156,7 +158,7 @@ scripts/                               PowerShell-checks tegen GonkaRouter
 
 ### 1. Supabase
 
-Voer in de **SQL Editor** in volgorde uit: `0001_langdot.sql`, `0002_caura.sql`, `0003_gonka_connectors.sql`.
+Voer in de **SQL Editor** in volgorde uit: `0001_langdot.sql`, `0002_caura.sql`, `0003_gonka_connectors.sql`, `0004_push_calendar.sql`.
 Zet onder **Authentication → URL Configuration** je Vercel-URL als Site URL en voeg
 `https://<jouw-app>/auth/callback` toe aan de Redirect URLs.
 
@@ -177,7 +179,10 @@ Zie `.env.example` (alle waarden leeg). Lokaal: kopieer naar `.env.local`. Op Ve
 | `MAX_EMAILS_PER_DAY`, `MAX_RECIPIENTS_PER_EMAIL` | | default 20 en 5 |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | voor Gmail | zie "Gmail koppelen" |
 | `GOOGLE_REDIRECT_URI` | | default `<origin>/api/connectors/google/callback` |
-| `CONNECTOR_ENCRYPTION_KEY` | voor Gmail | 32 bytes, base64 of hex |
+| `CONNECTOR_ENCRYPTION_KEY` | voor Gmail/Agenda | 32 bytes, base64 of hex |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | voor push | maak met `scripts/generate-vapid-keys.ps1` |
+| `VAPID_SUBJECT` | voor push | `mailto:jij@example.com` |
+| `MAX_EVENTS_PER_DAY` | | default 20 ingeplande afspraken per dag |
 | `CRON_SECRET` | ✓ | voor de pg_cron heartbeat |
 | `TAVILY_API_KEY` | | betere web_search |
 | `CAURA_API_KEY`, `CAURA_TENANT_ID`, `CAURA_FLEET_PREFIX` | | gedeeld geheugen (zie onder) |
@@ -233,6 +238,33 @@ verwijderen, instellingen wijzigen.
 
 ---
 
+## Google Agenda koppelen
+
+Gebruikt hetzelfde Google Cloud-project en dezelfde OAuth-client als Gmail.
+
+1. **APIs & Services → Library** → **Google Calendar API** → **Enable**.
+2. **OAuth consent screen → Data access → Add or remove scopes** → voeg toe:
+   `https://www.googleapis.com/auth/calendar.events` (sensitive). **Save**.
+3. In de app: **Verbindingen → Google Calendar → Verbinden**.
+
+Wat de dot kan: je afspraken bekijken, en een afspraak voorstellen die pas na jouw klik op **Inplannen** in je agenda
+komt (genodigden krijgen dan pas een uitnodiging). Wat hij niet kan: zonder klik inplannen, bestaande afspraken
+wijzigen of verwijderen. Agenda en Gmail zijn aparte verbindingen; je kunt ze los ontkoppelen.
+
+## Push-meldingen
+
+Gratis web push met VAPID, zonder externe dienst.
+
+1. Maak sleutels (zonder Node): `powershell -ExecutionPolicy Bypass -File scripts\generate-vapid-keys.ps1`.
+   Ze komen in `.env.local`; zet `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` en `VAPID_SUBJECT` ook in Vercel.
+   Verander de sleutels daarna niet meer, anders moet elk apparaat meldingen opnieuw aanzetten.
+2. Voer `supabase/migrations/0004_push_calendar.sql` uit.
+3. In de app: **🔕 Meldingen aanzetten** (zijmenu) → toestaan → **Testmelding**.
+
+Je krijgt een melding bij: een mail of afspraak die op goedkeuring wacht, een vraag van de dot, een achtergrondtaak die
+klaar of mislukt is, en een verbinding die verlopen is. Niet bij gewone chatantwoorden (dan zit je al in de app).
+Op iPhone/iPad werkt het alleen als je LangDot eerst via **Deel → Zet op beginscherm** installeert.
+
 ## Tests
 
 ```bash
@@ -249,6 +281,8 @@ npm test
 | `hallucination.test.ts` | regel staat in de prompt (+ LIVE: verzonnen bedrijf → geen verzonnen adres/telefoon/cijfers) |
 | `llm-and-budget.test.ts` | tokenbudget, retry-classificatie, nette foutmeldingen, `<think>`-filter, history-koppeling |
 | `prompt-and-secrets.test.ts` | voorkeuren in de prompt; geen geheime `NEXT_PUBLIC_`-vars; client-code importeert geen server-modules |
+| `calendar.test.ts` | afspraak-validatie; inplannen alleen na klik; eigen daglimiet; agenda-tools alleen met verbinding |
+| `push.test.ts` | naar alle apparaten, verlopen abonnementen opruimen, nooit een fout naar de agent |
 | `tool-calling.test.ts` | LIVE: tool calling en streaming via `lib/llm.ts` |
 
 LIVE-tests draaien alleen als `GONKA_API_KEY` gezet is (lokaal via `.env.local`, in CI via het repository secret
@@ -264,8 +298,8 @@ Is Caura onbereikbaar, dan werkt alles gewoon door op Supabase.
 
 ## Bewust niet in deze versie
 
-Bellen/voice, Slack/Teams, eigen cloud-VM met browser, computer-use, meerdere gebruikers per dot,
-Google Calendar en Drive (staan als "Binnenkort" op de Verbindingen-pagina).
+Bellen/voice, Slack/Teams, eigen cloud-VM met browser, computer-use, meerdere gebruikers per dot, bestaande afspraken wijzigen,
+Google Drive (staat als "Binnenkort" op de Verbindingen-pagina).
 
 ## Bekende beperkingen
 

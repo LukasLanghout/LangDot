@@ -38,10 +38,19 @@ export const PROVIDERS: ProviderInfo[] = [
   {
     id: "google_calendar",
     label: "Google Calendar",
-    description: "Afspraken bekijken en voorstellen.",
-    status: "coming_soon",
-    can: [],
-    cannot: [],
+    description: "Laat je dot je agenda kennen en afspraken voor je inplannen na jouw klik.",
+    status: "available",
+    can: [
+      "Je afspraken bekijken (\"wat staat er morgen?\", vrije tijd zoeken)",
+      "Een afspraak voorstellen; je ziet hem eerst in een goedkeuringskaart",
+      "De afspraak inplannen en uitnodigingen sturen, alleen nadat jij op Inplannen klikt",
+    ],
+    cannot: [
+      "Afspraken inplannen of uitnodigingen sturen zonder jouw klik",
+      "Bestaande afspraken wijzigen of verwijderen",
+      "Je agenda-instellingen of deelrechten aanpassen",
+    ],
+    connectPath: "/api/connectors/google/start?provider=google_calendar",
   },
   {
     id: "google_drive",

@@ -9,7 +9,7 @@ import { runWorker } from "@/lib/agent/worker";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-// "Opnieuw proberen" voor een mail die al is goedgekeurd maar niet verstuurd kon worden.
+// "Opnieuw proberen" voor een voorstel dat al is goedgekeurd maar niet uitgevoerd kon worden.
 // Keurt zelf niets goed: executePendingAction weigert alles wat niet "approved" is.
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const started = Date.now();
@@ -21,7 +21,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   const result = await executePendingAction(defaultExecDeps(db), user.id, id);
   if (!result.ok) return Response.json({ ok: false, code: result.code, error: result.message });
 
-  if (await continueAfterDecision(db, result.action, "sent")) {
+  if (await continueAfterDecision(db, result.action, "done")) {
     after(() => runWorker({ userId: user.id, deadline: started + 55_000 }).then(() => undefined));
   }
   return Response.json({ ok: true, status: "executed" });

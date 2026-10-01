@@ -19,6 +19,8 @@ const TOOL_LABELS: Record<string, string> = {
   gmail_search: "doorzoekt je mail",
   gmail_read: "leest een mail",
   request_connection: "vraagt om een verbinding",
+  calendar_list_events: "kijkt in je agenda",
+  calendar_create_event: "stelt een afspraak voor",
 };
 
 type Streaming = { text: string; tools: string[]; error?: string };
@@ -191,10 +193,10 @@ export function Chat({
                     {m.meta?.kind === "connect" && (
                       // Gewone link: de browser moet naar het toestemmingsscherm van Google navigeren.
                       <a
-                        href="/api/connectors/google/start?provider=gmail"
+                        href={`/api/connectors/google/start?provider=${m.meta.provider === "google_calendar" ? "google_calendar" : "gmail"}`}
                         className="inline-block mt-3 rounded-lg bg-accent text-white px-4 py-2 text-sm font-medium hover:brightness-110"
                       >
-                        Gmail verbinden
+                        {m.meta.provider === "google_calendar" ? "Google Agenda verbinden" : "Gmail verbinden"}
                       </a>
                     )}
                   </div>

@@ -46,6 +46,8 @@ function stepTitle(name: string, args: Record<string, any> | null) {
     case "gmail_send": return "Goedgekeurde mail versturen";
     case "gmail_search": return `Mail doorzoeken: ${String(a.query ?? "").slice(0, 80)}`;
     case "gmail_read": return "Mail lezen";
+    case "calendar_list_events": return "Agenda bekijken";
+    case "calendar_create_event": return `Afspraak voorstellen: ${String(a.summary ?? "").slice(0, 80)}`;
     default: return name;
   }
 }
@@ -86,8 +88,8 @@ class ChatActivity {
         status: "needs_input",
         steps: this.steps,
         current_step: this.steps.length - 1,
-        question: "Goedkeuring nodig voor een mail",
-        pending_action: { type: "gmail_send", action_id: p.actionIds[0] },
+        question: "Goedkeuring nodig",
+        pending_action: { type: "approval", action_id: p.actionIds[0] },
       });
     } else {
       Object.assign(update, { status: "done", result: clip(p.text, 2000) });
@@ -122,7 +124,7 @@ export async function runChat(opts: {
     { role: "user", content: opts.userText },
   ];
 
-  const toolCtx: ToolContext = { db, userId, taskId: null, origin: "chat", gmail: ctx.gmail, createdActionIds: [] };
+  const toolCtx: ToolContext = { db, userId, taskId: null, origin: "chat", gmail: ctx.gmail, calendar: ctx.calendar, createdActionIds: [] };
   const activity = new ChatActivity(db, userId, opts.userText);
   const tools = chatTools(toolCtx);
   let text = "";

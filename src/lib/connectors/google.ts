@@ -9,9 +9,20 @@ export const GMAIL_SCOPES = {
   readonly: "https://www.googleapis.com/auth/gmail.readonly",
 };
 
+export const CALENDAR_SCOPES = {
+  events: "https://www.googleapis.com/auth/calendar.events",
+};
+
 /** Scopes per provider. openid + email alleen om het e-mailadres van het account te tonen. */
 export const GOOGLE_PROVIDER_SCOPES: Record<string, string[]> = {
   gmail: ["openid", "email", GMAIL_SCOPES.send, GMAIL_SCOPES.compose, GMAIL_SCOPES.readonly],
+  google_calendar: ["openid", "email", CALENDAR_SCOPES.events],
+};
+
+/** Minimaal één van deze scopes moet de gebruiker toestaan, anders heeft de verbinding geen zin. */
+export const REQUIRED_SCOPES: Record<string, string[]> = {
+  gmail: [GMAIL_SCOPES.send, GMAIL_SCOPES.compose],
+  google_calendar: [CALENDAR_SCOPES.events],
 };
 
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";

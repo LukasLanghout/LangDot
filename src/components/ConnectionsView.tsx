@@ -10,9 +10,9 @@ import { formatTime } from "./ui";
 const ERRORS: Record<string, string> = {
   state: "De koppeling kon niet veilig worden afgerond (sessie verlopen of ongeldige link). Probeer het opnieuw.",
   denied: "Je hebt geen toestemming gegeven. Er is niets gekoppeld.",
-  scopes: "Zonder toestemming om mail te versturen kan de dot Gmail niet gebruiken. Probeer opnieuw en laat dat vinkje aan.",
+  scopes: "Je hebt een benodigd recht uitgevinkt (mail versturen of afspraken beheren). Probeer opnieuw en laat dat vinkje aan.",
   exchange: "Google gaf een fout bij het koppelen. Probeer het opnieuw.",
-  config: "Gmail-koppeling is op de server nog niet ingesteld (Google-client ontbreekt).",
+  config: "De Google-koppeling is op de server nog niet ingesteld (Google-client ontbreekt).",
   unknown_provider: "Onbekende dienst.",
 };
 
@@ -24,7 +24,7 @@ function Card({ info, connector }: { info: ProviderInfo; connector?: ConnectorRo
   const soon = info.status === "coming_soon";
 
   async function disconnect() {
-    if (!confirm(`${info.label} ontkoppelen? De dot kan dan geen mail meer versturen of lezen.`)) return;
+    if (!confirm(`${info.label} ontkoppelen? De dot kan deze dienst dan niet meer gebruiken.`)) return;
     setBusy(true);
     setError(null);
     const res = await fetch("/api/connectors/google/disconnect", {
@@ -106,7 +106,7 @@ export function ConnectionsView({ connectors, connected, error }: { connectors: 
           Koppel je eigen accounts. Je dot vraagt altijd eerst jouw goedkeuring voordat hij iets namens je verstuurt.
           Je kunt een verbinding op elk moment ontkoppelen.
         </p>
-        {connected && <div className="rounded-lg border border-ok/40 bg-ok/10 text-ok text-sm px-3 py-2">Verbonden! Je dot kan nu met Gmail werken.</div>}
+        {connected && <div className="rounded-lg border border-ok/40 bg-ok/10 text-ok text-sm px-3 py-2">Verbonden! Je dot kan nu met {PROVIDERS.find((p) => p.id === connected)?.label ?? "deze dienst"} werken.</div>}
         {error && <div className="rounded-lg border border-bad/40 bg-bad/10 text-bad text-sm px-3 py-2">{ERRORS[error] ?? "Er ging iets mis bij het koppelen."}</div>}
         {PROVIDERS.map((p) => <Card key={p.id} info={p} connector={connectors.find((c) => c.provider === p.id)} />)}
       </div>

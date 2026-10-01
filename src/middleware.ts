@@ -28,5 +28,5 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   // Niet voor statische bestanden en niet voor de cron-tick (die heeft geen sessie).
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/worker/tick).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.svg|sw.js|manifest.webmanifest|api/worker/tick|api/push/key).*)"],
 };

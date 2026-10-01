@@ -5,8 +5,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { decrypt, encrypt } from "@/lib/crypto";
 import { logAudit } from "@/lib/audit";
+import { notifyUser } from "@/lib/push";
 import { ConnectorError } from "./errors";
-import { GMAIL_SCOPES, refreshAccessToken, revokeToken } from "./google";
+import { CALENDAR_SCOPES, GMAIL_SCOPES, refreshAccessToken, revokeToken } from "./google";
 
 /** Kolommen die veilig naar de UI mogen. */
 export const PUBLIC_COLUMNS = "id, user_id, provider, account_email, scopes, expires_at, status, last_used_at, created_at, updated_at";
@@ -46,6 +47,18 @@ export async function gmailCapabilities(userId: string, db: SupabaseClient = cre
     canSend: scopes.includes(GMAIL_SCOPES.send) || scopes.includes(GMAIL_SCOPES.compose),
     canCompose: scopes.includes(GMAIL_SCOPES.compose),
     canRead: scopes.includes(GMAIL_SCOPES.readonly),
+  };
+}
+
+export type CalendarCapabilities = { status: "active" | "needs_reauth" | "none"; email: string | null; canWrite: boolean };
+
+export async function calendarCapabilities(userId: string, db: SupabaseClient = createAdminClient()): Promise<CalendarCapabilities> {
+  const c = await getConnector(userId, "google_calendar", db);
+  if (!c || c.status === "revoked") return { status: "none", email: null, canWrite: false };
+  return {
+    status: c.status === "active" ? "active" : "needs_reauth",
+    email: c.account_email,
+    canWrite: (c.scopes ?? []).includes(CALENDAR_SCOPES.events),
   };
 }
 
@@ -114,6 +127,12 @@ async function markNeedsReauth(db: SupabaseClient, userId: string, id: string, p
   console.warn(`[connectors] ${provider} voor ${userId}: needs_reauth (${reason})`);
   await db.from("connectors").update({ status: "needs_reauth", updated_at: new Date().toISOString() }).eq("id", id);
   await logAudit(db, { userId, actor: "system", action: "connector_needs_reauth", input: { provider }, output: { reason } });
+  await notifyUser(userId, {
+    title: "Verbinding verlopen",
+    body: `${provider === "gmail" ? "Gmail" : provider === "google_calendar" ? "Google Agenda" : provider} moet opnieuw verbonden worden.`,
+    url: "/connections",
+    tag: `reauth-${provider}`,
+  });
 }
 
 /** Ontkoppelen: token intrekken bij Google, versleutelde tokens wissen, status revoked. */

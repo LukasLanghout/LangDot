@@ -37,7 +37,7 @@ function files(dir: string): string[] {
 }
 
 const ALLOWED_PUBLIC = new Set(["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY"]);
-const SERVER_ONLY = ["@/lib/llm", "@/lib/crypto", "@/lib/budget", "@/lib/supabase/admin", "@/lib/connectors/store",
+const SERVER_ONLY = ["@/lib/llm", "@/lib/crypto", "@/lib/budget", "@/lib/push", "@/lib/supabase/admin", "@/lib/connectors/store", "@/lib/connectors/calendar",
   "@/lib/connectors/google", "@/lib/connectors/gmail", "@/lib/actions-store", "@/lib/agent/"];
 
 describe("geen secrets in client-side code", () => {
@@ -63,7 +63,7 @@ describe("geen secrets in client-side code", () => {
 
   it(".env.example bevat geen ingevulde geheimen", () => {
     const env = readFileSync(path.join(ROOT, ".env.example"), "utf8");
-    for (const name of ["GONKA_API_KEY", "SUPABASE_SERVICE_ROLE_KEY", "GOOGLE_CLIENT_SECRET", "CONNECTOR_ENCRYPTION_KEY", "TAVILY_API_KEY", "CAURA_API_KEY"]) {
+    for (const name of ["GONKA_API_KEY", "SUPABASE_SERVICE_ROLE_KEY", "GOOGLE_CLIENT_SECRET", "CONNECTOR_ENCRYPTION_KEY", "VAPID_PRIVATE_KEY", "TAVILY_API_KEY", "CAURA_API_KEY"]) {
       expect(env).toMatch(new RegExp(`^${name}=\\s*$`, "m"));
     }
   });

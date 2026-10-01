@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import { getUser } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { rejectAction } from "@/lib/actions";
+import { describeAction, rejectAction } from "@/lib/actions";
 import { supabaseActionStore } from "@/lib/actions-store";
 import { continueAfterDecision } from "@/lib/agent/approval-flow";
 import { runWorker } from "@/lib/agent/worker";
@@ -22,7 +22,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
 
   await logAudit(db, {
     userId: user.id, actor: "user", action: "action_rejected", taskId: r.action.task_id,
-    input: { action_id: id, to: r.action.payload.to, subject: r.action.payload.subject },
+    input: { action_id: id, type: r.action.type, what: describeAction(r.action) },
   });
   if (await continueAfterDecision(db, r.action, "rejected")) {
     after(() => runWorker({ userId: user.id, deadline: started + 55_000 }).then(() => undefined));

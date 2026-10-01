@@ -28,7 +28,8 @@ export function verifyOAuthState(opts: {
   cookie: string | undefined;
   state: string | null;
   userId: string | null | undefined;
-  provider: string;
+  /** Eén provider, of een lijst toegestane providers (de callback leest dan de provider uit de state). */
+  provider: string | string[];
   now?: number;
   decryptFn?: (s: string) => string;
 }): StateCheck {
@@ -44,7 +45,8 @@ export function verifyOAuthState(opts: {
   }
   if (!payload?.state || !safeEqual(payload.state, opts.state)) return { ok: false, reason: "state_mismatch" };
   if (payload.userId !== opts.userId) return { ok: false, reason: "user_mismatch" };
-  if (payload.provider !== opts.provider) return { ok: false, reason: "provider_mismatch" };
+  const allowed = Array.isArray(opts.provider) ? opts.provider : [opts.provider];
+  if (!allowed.includes(payload.provider)) return { ok: false, reason: "provider_mismatch" };
   if (!(payload.exp > (opts.now ?? Date.now()))) return { ok: false, reason: "expired" };
   return { ok: true, payload };
 }

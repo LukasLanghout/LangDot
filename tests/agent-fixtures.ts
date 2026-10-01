@@ -20,6 +20,7 @@ export function fakeAgentContext(overrides: Partial<AgentContext> = {}): AgentCo
     schedules: [],
     shared: [],
     gmail: { status: "none", email: null, canSend: false, canCompose: false, canRead: false },
+    calendar: { status: "none", email: null, canWrite: false },
     ...overrides,
   };
 }

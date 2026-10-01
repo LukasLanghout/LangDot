@@ -4,6 +4,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { complete, type ChatMessage, type CompleteOptions } from "@/lib/llm";
 import { LlmError, userSafeMessage } from "@/lib/llm-errors";
 import { logAudit } from "@/lib/audit";
+import { notifyUser } from "@/lib/push";
+import { describeAction, type ActionLike } from "@/lib/actions";
 import { computeNextRun } from "@/lib/schedule";
 import type { Option, Schedule, Step, Task } from "@/lib/types";
 import { executeTool, parseArgs, PLAN_TOOL, workerTools, type ToolContext } from "./tools";
@@ -223,7 +225,7 @@ async function executeStep(db: SupabaseClient, task: Task, deadline: number) {
 
   const ctx = await loadAgentContext(db, task.user_id);
   const toolCtx: ToolContext = {
-    db, userId: task.user_id, taskId: task.id, origin: "worker", gmail: ctx.gmail, createdActionIds: [],
+    db, userId: task.user_id, taskId: task.id, origin: "worker", gmail: ctx.gmail, calendar: ctx.calendar, createdActionIds: [],
   };
   const tools = workerTools(toolCtx);
   const messages: ChatMessage[] = [
@@ -260,7 +262,7 @@ async function executeStep(db: SupabaseClient, task: Task, deadline: number) {
       }
       const out = await executeTool(toolCtx, name, call.function.arguments);
       messages.push({ role: "tool", tool_call_id: call.id, content: out });
-      // Een mail-concept stopt de stap: de taak wacht op de klik van de gebruiker.
+      // Een voorstel (mail of afspraak) stopt de stap: de taak wacht op de klik van de gebruiker.
       if (toolCtx.createdActionIds.length) return awaitApproval(db, task, toolCtx.createdActionIds);
     }
   }
@@ -279,21 +281,25 @@ async function completeStep(db: SupabaseClient, task: Task, index: number, resul
 }
 
 async function awaitApproval(db: SupabaseClient, task: Task, actionIds: string[]) {
+  const { data } = await db.from("pending_actions").select("type, payload").in("id", actionIds).eq("user_id", task.user_id);
+  const what = ((data ?? []) as ActionLike[]).map((a) => describeAction(a)).join("; ") || "een voorstel";
+
   await saveRunning(db, task, {
     status: "needs_input",
-    question: "Goedkeuring nodig voor een mail",
+    question: "Goedkeuring nodig",
     options: null,
-    pending_action: { type: "gmail_send", action_id: actionIds[0] },
+    pending_action: { type: "approval", action_id: actionIds[0] },
     answer: null,
     locked_until: null,
   });
   await db.from("dot_messages").insert({
     user_id: task.user_id,
     role: "assistant",
-    content: `**${task.title}**: ik heb een mail opgesteld. Kijk hem na en klik op Versturen of Afwijzen.`,
+    content: `**${task.title}**: ik heb ${what} klaargezet. Kijk het na en keur goed of wijs af.`,
     task_id: task.id,
     meta: { kind: "approval", action_ids: actionIds },
   });
+  await notifyUser(task.user_id, { title: "Goedkeuring nodig", body: `${task.title}: ${what}`, tag: `approval-${actionIds[0]}` });
 }
 
 async function askUser(db: SupabaseClient, task: Task, args: Record<string, any>) {
@@ -321,21 +327,23 @@ async function askUser(db: SupabaseClient, task: Task, args: Record<string, any>
     task_id: task.id,
     meta: { kind: "question", options },
   });
+  await notifyUser(task.user_id, { title: "Je dot heeft een vraag", body: `${task.title}: ${question}`, tag: `question-${task.id}` });
 }
 
 async function finalizeTask(db: SupabaseClient, task: Task) {
   const ctx = await loadAgentContext(db, task.user_id);
   const results = task.steps.map((s, i) => `### Stap ${i + 1}: ${s.title}\n${s.result ?? ""}`).join("\n\n");
-  const { data: actions } = await db.from("pending_actions").select("status, payload")
+  const { data: actions } = await db.from("pending_actions").select("type, status, payload")
     .eq("task_id", task.id).eq("user_id", task.user_id);
-  const mails = (actions ?? []).map((a: any) => ({ to: a.payload?.to, subject: a.payload?.subject, status: a.status }));
+  const proposals = ((actions ?? []) as (ActionLike & { status: string })[])
+    .map((a) => ({ wat: describeAction(a), status: a.status }));
 
   const res = await taskComplete(db, task, {
     messages: [
       { role: "system", content: summaryPrompt(ctx) },
       {
         role: "user",
-        content: `Taak: ${task.title}\nInstructies: ${task.instructions}\n\n${results}\n\nMails: ${JSON.stringify(mails)}`,
+        content: `Taak: ${task.title}\nInstructies: ${task.instructions}\n\n${results}\n\nVoorstellen (mail/agenda): ${JSON.stringify(proposals)}`,
       },
     ],
     temperature: 0.4,
@@ -355,6 +363,7 @@ async function finalizeTask(db: SupabaseClient, task: Task) {
     meta: { kind: "task_done" },
   });
   await logAudit(db, { userId: task.user_id, actor: "agent", action: "task_done", taskId: task.id, output: summary });
+  await notifyUser(task.user_id, { title: "Taak klaar", body: task.title, tag: `done-${task.id}` });
 }
 
 async function handleFailure(db: SupabaseClient, task: Task, e: unknown) {
@@ -373,6 +382,7 @@ async function handleFailure(db: SupabaseClient, task: Task, e: unknown) {
       task_id: task.id,
       meta: { kind: "task_failed" },
     });
+    await notifyUser(task.user_id, { title: "Taak mislukt", body: task.title, tag: `failed-${task.id}` });
   } else {
     // Backoff: over een minuut opnieuw proberen.
     await db.from("dot_tasks")

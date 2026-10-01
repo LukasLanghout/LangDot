@@ -11,12 +11,12 @@ export function memoryStore(): ActionStore & { rows: PendingAction[] } {
     async get(id, userId) {
       return rows.find((r) => r.id === id && r.user_id === userId) ?? null;
     },
-    async create({ userId, taskId, payload }) {
-      const row: PendingAction = {
+    async create({ userId, taskId, type, payload }) {
+      const row = {
         id: `act_${++n}`,
         user_id: userId,
         task_id: taskId,
-        type: "gmail_send",
+        type,
         payload,
         status: "pending",
         error: null,
@@ -24,7 +24,7 @@ export function memoryStore(): ActionStore & { rows: PendingAction[] } {
         created_at: new Date().toISOString(),
         decided_at: null,
         executed_at: null,
-      };
+      } as PendingAction;
       rows.push(row);
       return row;
     },
@@ -38,25 +38,42 @@ export function memoryStore(): ActionStore & { rows: PendingAction[] } {
       const r = rows.find((x) => x.id === id && x.user_id === userId);
       if (r) Object.assign(r, patch);
     },
-    async countExecutedSince(userId, since) {
-      return rows.filter((r) => r.user_id === userId && r.status === "executed" && r.executed_at && new Date(r.executed_at) >= since).length;
+    async countExecutedSince(userId, since, type) {
+      return rows.filter((r) => r.user_id === userId && r.type === type && r.status === "executed" && r.executed_at && new Date(r.executed_at) >= since).length;
     },
   };
 }
 
-export function execDeps(store: ActionStore, sent: { token: string; to: string[]; subject: string }[] = []): ExecDeps {
+export function execDeps(
+  store: ActionStore,
+  sent: { token: string; to: string[]; subject: string }[] = [],
+  events: { token: string; summary: string; attendees: string[] }[] = [],
+): ExecDeps {
   return {
     store,
-    getAccessToken: async () => "test-token",
+    getAccessToken: async (_userId, provider) => `token-${provider}`,
     send: async (token, payload) => {
       sent.push({ token, to: payload.to, subject: payload.subject });
       return `msg_${sent.length}`;
     },
+    createEvent: async (token, payload) => {
+      events.push({ token, summary: payload.summary, attendees: payload.attendees ?? [] });
+      return `evt_${events.length}`;
+    },
   };
 }
 
-export function mailDeps(store: ActionStore, sent: { token: string; to: string[]; subject: string }[] = []): MailToolDeps {
-  return { store, exec: execDeps(store, sent), getAccessToken: async () => "test-token" };
+export function mailDeps(
+  store: ActionStore,
+  sent: { token: string; to: string[]; subject: string }[] = [],
+  events: { token: string; summary: string; attendees: string[] }[] = [],
+): MailToolDeps {
+  return {
+    store,
+    exec: execDeps(store, sent, events),
+    getAccessToken: async () => "test-token",
+    listEvents: async () => [{ id: "e1", summary: "Tandarts", start: "2026-10-02T09:00:00+02:00", end: "2026-10-02T09:30:00+02:00" }],
+  };
 }
 
 /** Minimale nep-Supabase: alleen audit-inserts (executeTool logt elke call). */
@@ -78,6 +95,7 @@ export function toolCtx(overrides: Partial<ToolContext> & { mailDeps: MailToolDe
     taskId: null,
     origin: "chat",
     gmail: { status: "active", email: "me@example.com", canSend: true, canCompose: false, canRead: false },
+    calendar: { status: "none", email: null, canWrite: false },
     createdActionIds: [],
     ...overrides,
   };

@@ -12,6 +12,7 @@ import { ActivityPanel } from "./ActivityPanel";
 import { MemoryPanel } from "./MemoryPanel";
 import { SchedulePanel } from "./SchedulePanel";
 import { AuditPanel } from "./AuditPanel";
+import { PushToggle } from "./PushToggle";
 
 type Initial = {
   messages: Message[];
@@ -41,13 +42,13 @@ export function AppShell({
   initialProfile,
   initial,
   cauraFleet,
-  gmailStatus,
+  reauthNeeded,
 }: {
   userId: string;
   initialProfile: Profile;
   initial: Initial;
   cauraFleet: string | null;
-  gmailStatus: "active" | "needs_reauth" | "none";
+  reauthNeeded: string[];
 }) {
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
@@ -187,6 +188,9 @@ export function AppShell({
           >
             {profile.paused ? "▶ Hervatten" : "⏸ Pauzeren"}
           </button>
+          <div className="hidden lg:block">
+            <PushToggle />
+          </div>
           <Link href="/connections" className="hidden lg:block text-center rounded-lg px-3 py-1.5 text-sm border border-line hover:bg-panel-2">
             Verbindingen
           </Link>
@@ -234,9 +238,9 @@ export function AppShell({
             </button>
           ))}
         </nav>
-        {gmailStatus === "needs_reauth" && (
+        {reauthNeeded.length > 0 && (
           <Link href="/connections" className="block mx-3 mt-3 rounded-lg border border-warn/40 bg-warn/10 text-warn text-sm px-3 py-2">
-            Je Gmail-verbinding is verlopen. Klik hier om opnieuw te verbinden.
+            Je verbinding met {reauthNeeded.join(" en ")} is verlopen. Klik hier om opnieuw te verbinden.
           </Link>
         )}
         <div className="flex-1 min-h-0 overflow-y-auto p-3">
@@ -246,6 +250,7 @@ export function AppShell({
           {tab === "audit" && <AuditPanel entries={audit} />}
         </div>
         <div className="lg:hidden flex gap-3 justify-center p-2 border-t border-line text-sm">
+          <PushToggle />
           <Link href="/connections" className="text-muted hover:text-fg">Verbindingen</Link>
           <Link href="/create" className="text-muted hover:text-fg">Uiterlijk</Link>
           <button onClick={logout} className="text-muted hover:text-fg">Uitloggen</button>

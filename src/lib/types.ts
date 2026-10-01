@@ -13,15 +13,13 @@ export type Step = {
 /** Antwoordoptie van een keuzevraag (ask_user). Keuzevragen keuren nooit iets goed. */
 export type Option = { label: string };
 
-/** Koppeling van een taak aan een actie die op goedkeuring wacht. */
-export type PendingAction = { type: "gmail_send"; action_id: string } | null;
+/** Koppeling van een taak aan een actie die op goedkeuring wacht ("gmail_send" = oude rijen). */
+export type PendingAction = { type: "approval" | "gmail_send"; action_id: string } | null;
 
-export type ActionRow = {
+type ActionBase = {
   id: string;
   user_id: string;
   task_id: string | null;
-  type: "gmail_send";
-  payload: { to: string[]; subject: string; body: string; gmail_draft_id?: string | null };
   status: "pending" | "approved" | "rejected" | "executed" | "expired";
   error: string | null;
   result: Record<string, unknown> | null;
@@ -29,6 +27,21 @@ export type ActionRow = {
   decided_at: string | null;
   executed_at: string | null;
 };
+
+export type ActionRow =
+  | (ActionBase & { type: "gmail_send"; payload: { to: string[]; subject: string; body: string; gmail_draft_id?: string | null } })
+  | (ActionBase & {
+      type: "calendar_create_event";
+      payload: {
+        summary: string;
+        start: string;
+        end: string;
+        time_zone: string;
+        location?: string | null;
+        description?: string | null;
+        attendees?: string[];
+      };
+    });
 
 export type ConnectorRow = {
   id: string;

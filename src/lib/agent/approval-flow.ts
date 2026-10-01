@@ -1,29 +1,32 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { PendingAction } from "@/lib/actions";
+import { describeAction, type PendingAction } from "@/lib/actions";
 import type { Step, Task } from "@/lib/types";
 
 /**
- * Laat de taak verdergaan nadat de gebruiker een mail heeft verstuurd of afgewezen.
+ * Laat de taak verdergaan nadat de gebruiker een voorstel (mail of afspraak) heeft uitgevoerd of afgewezen.
  * - chat_turn-taak: direct afsluiten (klaar of geannuleerd).
  * - achtergrondtaak: uitkomst vastleggen bij de huidige stap en terug in de wachtrij.
  * Geeft true als de worker afgetrapt moet worden.
  */
-export async function continueAfterDecision(db: SupabaseClient, action: PendingAction, outcome: "sent" | "rejected") {
+export async function continueAfterDecision(db: SupabaseClient, action: PendingAction, outcome: "done" | "rejected") {
   if (!action.task_id) return false;
   const { data } = await db.from("dot_tasks").select("*").eq("id", action.task_id).eq("user_id", action.user_id).maybeSingle();
   const task = data as Task | null;
   if (!task || task.status !== "needs_input") return false;
 
-  const to = action.payload.to.join(", ");
+  const what = describeAction(action);
+  const verb = action.type === "gmail_send" ? "verstuurd" : "ingepland";
   const steps: Step[] = [...(task.steps ?? [])];
   const now = new Date().toISOString();
 
   if (task.source === "chat_turn") {
     const last = steps.length - 1;
-    if (last >= 0) steps[last] = { ...steps[last], status: "done", title: outcome === "sent" ? "Verstuurd na jouw goedkeuring" : "Afgewezen door jou" };
+    if (last >= 0) {
+      steps[last] = { ...steps[last], status: "done", title: outcome === "done" ? `${verb[0].toUpperCase()}${verb.slice(1)} na jouw goedkeuring` : "Afgewezen door jou" };
+    }
     await db.from("dot_tasks").update({
-      status: outcome === "sent" ? "done" : "cancelled",
-      result: outcome === "sent" ? `Mail verstuurd aan ${to}: "${action.payload.subject}"` : `Mail aan ${to} afgewezen; niet verstuurd.`,
+      status: outcome === "done" ? "done" : "cancelled",
+      result: outcome === "done" ? `${what[0].toUpperCase()}${what.slice(1)}: ${verb}.` : `${what[0].toUpperCase()}${what.slice(1)}: afgewezen, niets gedaan.`,
       steps,
       current_step: steps.length,
       question: null,
@@ -40,9 +43,9 @@ export async function continueAfterDecision(db: SupabaseClient, action: PendingA
       qa: [
         ...(steps[idx].qa ?? []),
         {
-          question: `Mail aan ${to}, onderwerp "${action.payload.subject}"`,
-          answer: outcome === "sent" ? "Verstuurd na klik van de gebruiker op Versturen." : "Afgewezen door de gebruiker; NIET verstuurd.",
-          approved: outcome === "sent",
+          question: `Goedkeuring voor ${what}`,
+          answer: outcome === "done" ? `${verb[0].toUpperCase()}${verb.slice(1)} na klik van de gebruiker.` : "Afgewezen door de gebruiker; NIET uitgevoerd.",
+          approved: outcome === "done",
         },
       ],
     };
