@@ -58,7 +58,7 @@ export async function POST(req: Request) {
           .insert({ user_id: user.id, role: "assistant", content: text, reply_to: saved.id, meta: result.meta ?? {} })
           .select("id")
           .single();
-        send({ t: "done", id: reply?.id ?? null, meta: result.meta });
+        send({ t: "done", id: reply?.id ?? null, text, meta: result.meta });
       } catch (e) {
         // Details alleen in de serverlog; de gebruiker krijgt een nette melding zonder API-fouten of modelnamen.
         console.error("[chat] mislukt:", e instanceof LlmError ? `${e.kind}: ${e.detail}` : e);

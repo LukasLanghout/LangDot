@@ -8,7 +8,9 @@ export type ChatEvent =
   | { t: "user"; id: string }
   | { t: "text"; d: string }
   | { t: "tool"; name: string }
-  | { t: "done"; id: string | null; meta: Message["meta"] }
+  /** Nieuwe ronde na tool-calls: de tussentekst van de vorige ronde vervalt. */
+  | { t: "reset" }
+  | { t: "done"; id: string | null; text: string; meta: Message["meta"] }
   | { t: "error"; message: string };
 
 const MAX_ROUNDS = 5;
@@ -127,23 +129,29 @@ export async function runChat(opts: {
   const toolCtx: ToolContext = { db, userId, taskId: null, origin: "chat", gmail: ctx.gmail, calendar: ctx.calendar, createdActionIds: [] };
   const activity = new ChatActivity(db, userId, opts.userText);
   const tools = chatTools(toolCtx);
-  let text = "";
+  // Het antwoord is de tekst van de LAATSTE ronde. Modellen schrijven vaak al tekst vóór een tool-call
+  // en herhalen die daarna; die tussentekst plakken we er dus niet voor (dat gaf dubbele antwoorden).
+  let roundText = "";
+  let interimText = "";
 
   try {
     for (let round = 0; round <= MAX_ROUNDS; round++) {
       const last = round === MAX_ROUNDS;
+      roundText = "";
       const result = await complete({
         messages,
         tools,
         toolChoice: last ? "none" : "auto", // laatste ronde: afronden zonder tools
         userId,
         onText: (d) => {
-          text += d;
+          if (!roundText && interimText) send({ t: "reset" });
+          roundText += d;
           send({ t: "text", d });
         },
       });
 
       if (!result.toolCalls.length || last) break;
+      if (roundText.trim()) interimText = roundText;
 
       messages.push({ role: "assistant", content: result.content || null, tool_calls: result.toolCalls });
       for (const call of result.toolCalls) {
@@ -156,16 +164,15 @@ export async function runChat(opts: {
         const out = await executeTool(toolCtx, name, call.function.arguments);
         messages.push({ role: "tool", tool_call_id: call.id, content: out });
       }
-      if (text && !text.endsWith("\n")) {
-        text += "\n\n";
-        send({ t: "text", d: "\n\n" });
-      }
     }
   } catch (e) {
+    const text = roundText || interimText;
     await activity.finish({ text, actionIds: [], failed: "De chatbeurt is mislukt." });
     throw e;
   }
 
+  // Gaf de laatste ronde geen tekst, dan blijft de tussentekst het antwoord.
+  const text = roundText.trim() || interimText.trim();
   await activity.finish({ text, actionIds: toolCtx.createdActionIds });
 
   const meta: Message["meta"] = toolCtx.createdActionIds.length

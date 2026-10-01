@@ -112,11 +112,14 @@ export function Chat({
           } else if (ev.t === "text") {
             full += ev.d;
             setStreaming((s) => (s ? { ...s, text: s.text + ev.d } : s));
+          } else if (ev.t === "reset") {
+            full = "";
+            setStreaming((s) => (s ? { ...s, text: "" } : s));
           } else if (ev.t === "tool") {
             setStreaming((s) => (s ? { ...s, tools: [...s.tools, ev.name] } : s));
           } else if (ev.t === "done") {
             if (ev.id) {
-              onMessage({ id: ev.id, user_id: profile.user_id, role: "assistant", content: full.trim() || "…", task_id: null, reply_to: userMessageId, meta: ev.meta ?? null, created_at: now() });
+              onMessage({ id: ev.id, user_id: profile.user_id, role: "assistant", content: (typeof ev.text === "string" && ev.text.trim()) || full.trim() || "…", task_id: null, reply_to: userMessageId, meta: ev.meta ?? null, created_at: now() });
             }
             setStreaming(null);
           } else if (ev.t === "error") {
