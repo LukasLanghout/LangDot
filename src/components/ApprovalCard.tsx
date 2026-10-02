@@ -126,6 +126,15 @@ export function ApprovalCard({ action }: { action: ActionRow }) {
           <div><span className="text-muted">Aan:</span> {action.payload.to.join(", ")}</div>
           <div><span className="text-muted">Onderwerp:</span> {action.payload.subject || <em className="text-muted">(geen)</em>}</div>
           <div className="mt-2 whitespace-pre-wrap rounded-lg bg-bg/40 border border-line p-2.5 max-h-72 overflow-y-auto">{action.payload.body}</div>
+          {!!action.payload.attachments?.length && (
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {action.payload.attachments.map((a) => (
+                <span key={a.document_id} className="text-xs rounded-full border border-line px-2 py-0.5">
+                  📎 {a.name} <span className="text-muted">({Math.max(1, Math.round(a.size / 1024))} KB)</span>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       ) : (
         <div className="space-y-1">

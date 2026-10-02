@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { AppShell } from "@/components/AppShell";
 import { cauraEnabled, fleetFor } from "@/lib/caura";
-import type { ActionRow, AuditEntry, Memory, Message, Profile, Schedule, Task } from "@/lib/types";
+import type { ActionRow, AuditEntry, DocumentRow, Memory, Message, Profile, Schedule, Task } from "@/lib/types";
 import { calendarCapabilities, gmailCapabilities } from "@/lib/connectors/store";
 
 export const dynamic = "force-dynamic";
@@ -15,7 +15,7 @@ export default async function Home() {
   const { data: profile } = await supabase.from("dot_profiles").select("*").eq("user_id", user.id).maybeSingle();
   if (!profile) redirect("/create");
 
-  const [messages, tasks, memories, schedules, actions, audit, gmail, calendar] = await Promise.all([
+  const [messages, tasks, memories, schedules, actions, audit, gmail, calendar, documents] = await Promise.all([
     supabase.from("dot_messages").select("*").order("created_at", { ascending: false }).limit(100),
     supabase.from("dot_tasks").select("*").order("created_at", { ascending: false }).limit(50),
     supabase.from("dot_memories").select("*").order("updated_at", { ascending: false }),
@@ -24,6 +24,7 @@ export default async function Home() {
     supabase.from("dot_audit").select("*").order("created_at", { ascending: false }).limit(150),
     gmailCapabilities(user.id).catch(() => null),
     calendarCapabilities(user.id).catch(() => null),
+    supabase.from("documents").select("id, user_id, name, mime, size, storage_path, text_chars, status, error, pinned, created_at").order("created_at", { ascending: false }).limit(100),
   ]);
 
   return (
@@ -38,6 +39,7 @@ export default async function Home() {
         memories: (memories.data ?? []) as Memory[],
         schedules: (schedules.data ?? []) as Schedule[],
         actions: (actions.data ?? []) as ActionRow[],
+        documents: (documents.data ?? []) as DocumentRow[],
         audit: (audit.data ?? []) as AuditEntry[],
       }}
     />

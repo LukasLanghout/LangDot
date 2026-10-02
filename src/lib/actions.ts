@@ -12,7 +12,19 @@ import { ConnectorError } from "@/lib/connectors/errors";
 export type ActionStatus = "pending" | "approved" | "rejected" | "executed" | "expired";
 export type ActionType = "gmail_send" | "calendar_create_event";
 
-export type EmailPayload = { to: string[]; subject: string; body: string; gmail_draft_id?: string | null };
+/** Bijlage = een document van de gebruiker (alleen metadata; de inhoud wordt pas bij versturen geladen). */
+export type Attachment = { document_id: string; name: string; mime: string; size: number };
+
+export type EmailPayload = {
+  to: string[];
+  subject: string;
+  body: string;
+  gmail_draft_id?: string | null;
+  attachments?: Attachment[];
+};
+
+export const MAX_ATTACHMENTS = 5;
+export const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024;
 
 export type EventPayload = {
   summary: string;
@@ -79,7 +91,7 @@ function parseAddresses(input: unknown) {
 
 export type Validation<T> = { ok: true; payload: T } | { ok: false; error: string };
 
-export function validateEmailPayload(input: { to?: unknown; subject?: unknown; body?: unknown; gmail_draft_id?: unknown }): Validation<EmailPayload> {
+export function validateEmailPayload(input: { to?: unknown; subject?: unknown; body?: unknown; gmail_draft_id?: unknown; attachments?: unknown }): Validation<EmailPayload> {
   const { maxRecipients } = actionLimits();
   const to = parseAddresses(input.to);
   if (!to.length) return { ok: false, error: "Geen ontvanger opgegeven." };
@@ -95,8 +107,21 @@ export function validateEmailPayload(input: { to?: unknown; subject?: unknown; b
   if (!body) return { ok: false, error: "De mail heeft geen tekst." };
   if (body.length > 20_000) return { ok: false, error: "De mail is te lang." };
 
+  const attachments: Attachment[] = Array.isArray(input.attachments)
+    ? input.attachments
+        .filter((a: any) => a && typeof a.document_id === "string" && typeof a.name === "string")
+        .map((a: any) => ({
+          document_id: a.document_id,
+          name: String(a.name).replace(/[\r\n"\\]/g, "_").slice(0, 150),
+          mime: typeof a.mime === "string" && /^[\w.+-]+\/[\w.+-]+$/.test(a.mime) ? a.mime : "application/octet-stream",
+          size: Math.max(0, Number(a.size) || 0),
+        }))
+    : [];
+  if (attachments.length > MAX_ATTACHMENTS) return { ok: false, error: `Maximaal ${MAX_ATTACHMENTS} bijlagen per mail.` };
+  if (attachments.reduce((s, a) => s + a.size, 0) > MAX_ATTACHMENT_BYTES) return { ok: false, error: "Bijlagen samen mogen maximaal 15 MB zijn." };
+
   const gmailDraftId = typeof input.gmail_draft_id === "string" ? input.gmail_draft_id : null;
-  return { ok: true, payload: { to, subject, body, gmail_draft_id: gmailDraftId } };
+  return { ok: true, payload: { to, subject, body, gmail_draft_id: gmailDraftId, attachments } };
 }
 
 export function validateEventPayload(input: {
@@ -204,7 +229,9 @@ export type ExecResult =
 export type ExecDeps = {
   store: ActionStore;
   getAccessToken: (userId: string, provider: "gmail" | "google_calendar") => Promise<string>;
-  send: (token: string, payload: EmailPayload) => Promise<string>;
+  send: (token: string, payload: EmailPayload, files: { name: string; mime: string; data: Buffer }[]) => Promise<string>;
+  /** Laadt de inhoud van een bijlage; alleen documenten van deze gebruiker. */
+  loadAttachment?: (userId: string, documentId: string) => Promise<{ name: string; mime: string; data: Buffer }>;
   createEvent?: (token: string, payload: EventPayload) => Promise<string>;
   audit?: (entry: { userId: string; action: string; taskId: string | null; input: unknown; output?: unknown }) => Promise<void>;
   now?: () => Date;
@@ -221,7 +248,10 @@ export type ActionLike =
 
 /** Korte, veilige omschrijving voor audit-log en taakresultaat (geen mailtekst). */
 export function describeAction(a: ActionLike) {
-  if (a.type === "gmail_send") return `mail aan ${a.payload.to.join(", ")}, onderwerp "${a.payload.subject}"`;
+  if (a.type === "gmail_send") {
+    const n = a.payload.attachments?.length ?? 0;
+    return `mail aan ${a.payload.to.join(", ")}, onderwerp "${a.payload.subject}"${n ? ` (${n} bijlage${n === 1 ? "" : "n"})` : ""}`;
+  }
   const when = DateTime.fromISO(a.payload.start, { zone: a.payload.time_zone }).setLocale("nl").toFormat("ccc d LLL HH:mm");
   return `afspraak "${a.payload.summary}" op ${when}`;
 }
@@ -253,8 +283,15 @@ export async function executePendingAction(deps: ExecDeps, userId: string, actio
   try {
     let externalId: string;
     if (action.type === "gmail_send") {
+      const mail = v.payload as EmailPayload;
+      const files = [];
+      for (const a of mail.attachments ?? []) {
+        if (!deps.loadAttachment) throw new ConnectorError("config", "geen loadAttachment");
+        files.push(await deps.loadAttachment(userId, a.document_id));
+      }
+      if (files.reduce((s, f) => s + f.data.length, 0) > MAX_ATTACHMENT_BYTES) throw new Error("Bijlagen zijn te groot");
       const token = await deps.getAccessToken(userId, "gmail");
-      externalId = await deps.send(token, v.payload as EmailPayload);
+      externalId = await deps.send(token, mail, files);
     } else {
       if (!deps.createEvent) throw new ConnectorError("config", "geen createEvent");
       const token = await deps.getAccessToken(userId, "google_calendar");
@@ -267,7 +304,7 @@ export async function executePendingAction(deps: ExecDeps, userId: string, actio
       action: action.type === "gmail_send" ? "email_sent" : "calendar_event_created",
       taskId: action.task_id,
       input: action.type === "gmail_send"
-        ? { to: (v.payload as EmailPayload).to, subject: (v.payload as EmailPayload).subject, sent_at: now.toISOString() }
+        ? { to: (v.payload as EmailPayload).to, subject: (v.payload as EmailPayload).subject, attachments: ((v.payload as EmailPayload).attachments ?? []).map((a) => a.name), sent_at: now.toISOString() }
         : { summary: (v.payload as EventPayload).summary, start: (v.payload as EventPayload).start, attendees: (v.payload as EventPayload).attendees, created_at: now.toISOString() },
     });
     return { ok: true, action: { ...claimed, result } as PendingAction, externalId };

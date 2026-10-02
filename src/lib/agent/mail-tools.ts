@@ -14,6 +14,8 @@ export type MailToolDeps = {
   search?: (token: string, query: string) => Promise<unknown>;
   read?: (token: string, id: string) => Promise<unknown>;
   listEvents?: (token: string, opts: { from: string; to: string; query?: string }) => Promise<unknown>;
+  /** Metadata van documenten; geeft ALLEEN documenten van deze gebruiker terug. */
+  getDocuments?: (userId: string, ids: string[]) => Promise<{ id: string; name: string; mime: string; size: number }[]>;
 };
 
 export type MailToolCtx = {
@@ -29,17 +31,28 @@ const APPROVAL_NOTE =
   "jij kunt niet goedkeuren en mag nooit zeggen dat de gebruiker akkoord gaf. Het systeem voert het zelf uit na die klik.";
 
 export async function gmailCreateDraft(deps: MailToolDeps, ctx: MailToolCtx, args: Record<string, unknown>) {
+  // Bijlagen: alleen eigen documenten. Onbekende of andermans ids = fout (niet stilletjes weglaten).
+  const wanted = Array.isArray(args.attachments) ? [...new Set(args.attachments.map(String))] : [];
+  let attachments: { document_id: string; name: string; mime: string; size: number }[] = [];
+  if (wanted.length) {
+    if (!deps.getDocuments) throw new Error("Bijlagen zijn niet beschikbaar");
+    const docs = await deps.getDocuments(ctx.userId, wanted);
+    const missing = wanted.filter((id) => !docs.some((d) => d.id === id));
+    if (missing.length) throw new Error(`Onbekend document: ${missing.join(", ")}. Gebruik document_list voor de juiste id's.`);
+    attachments = docs.map((d) => ({ document_id: d.id, name: d.name, mime: d.mime, size: d.size }));
+  }
+
   const res = await createEmailAction(deps.store, {
     userId: ctx.userId,
     taskId: ctx.taskId,
-    payload: { to: args.to, subject: args.subject, body: args.body },
+    payload: { to: args.to, subject: args.subject, body: args.body, attachments },
   });
   if (!res.ok) throw new Error(res.error);
   if (res.action.type !== "gmail_send") throw new Error("Onverwacht actietype");
 
   // Optioneel ook in Gmail › Concepten (gmail.compose). Mislukt dat, dan blijft het concept in LangDot.
   let inGmailDrafts = false;
-  if (ctx.canCompose && deps.createGmailDraft) {
+  if (ctx.canCompose && deps.createGmailDraft && !attachments.length) {
     try {
       const token = await deps.getAccessToken(ctx.userId, "gmail");
       const draftId = await deps.createGmailDraft(token, res.action.payload);
@@ -56,6 +69,7 @@ export async function gmailCreateDraft(deps: MailToolDeps, ctx: MailToolCtx, arg
     pending_action_id: res.action.id,
     status: "pending",
     in_gmail_drafts: inGmailDrafts,
+    attachments: attachments.map((a) => a.name),
     note: `Het concept staat in een goedkeuringskaart (Versturen/Afwijzen). ${APPROVAL_NOTE}`,
   };
 }

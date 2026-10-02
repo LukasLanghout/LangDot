@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
+import { uploadDocument } from "@/lib/documents/client-upload";
 import type { ActionRow, Message, Profile, Task } from "@/lib/types";
 import { DotAvatar } from "./DotAvatar";
 import { Markdown, QuestionOptions, StatusBadge, formatTime } from "./ui";
@@ -19,11 +21,17 @@ const TOOL_LABELS: Record<string, string> = {
   gmail_search: "doorzoekt je mail",
   gmail_read: "leest een mail",
   request_connection: "vraagt om een verbinding",
+  document_list: "bekijkt je documenten",
+  document_read: "leest een document",
+  document_search: "zoekt in je documenten",
   calendar_list_events: "kijkt in je agenda",
   calendar_create_event: "stelt een afspraak voor",
 };
 
 type Streaming = { text: string; tools: string[]; error?: string };
+
+/** Bijlage in het invoerveld, tijdens en na het uploaden. */
+type Pending = { key: string; name: string; status: string; id?: string; failed?: boolean };
 
 /**
  * Chronologisch, maar een antwoord staat altijd direct onder het bericht waar het bij hoort
@@ -59,6 +67,26 @@ export function Chat({
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState<Streaming | null>(null);
   const [sending, setSending] = useState(false);
+  const [attachments, setAttachments] = useState<Pending[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const supabase = useMemo(() => createClient(), []);
+  const uploading = attachments.some((a) => !a.id && !a.failed);
+
+  async function addFiles(files: FileList | File[] | null) {
+    for (const file of Array.from(files ?? [])) {
+      const key = `${Date.now()}-${Math.random()}`;
+      setAttachments((l) => [...l, { key, name: file.name, status: "voorbereiden…" }]);
+      const update = (patch: Partial<Pending>) => setAttachments((l) => l.map((a) => (a.key === key ? { ...a, ...patch } : a)));
+      try {
+        const doc = await uploadDocument(supabase, profile.user_id, file, (s) => update({ status: s }));
+        update({ id: doc.id, status: doc.status === "ready" ? "klaar" : doc.error ?? "niet leesbaar" });
+      } catch (e) {
+        update({ failed: true, status: e instanceof Error ? e.message : "mislukt" });
+      }
+    }
+    if (fileRef.current) fileRef.current.value = "";
+  }
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -74,9 +102,12 @@ export function Chat({
   for (const m of messages) if (m.meta?.kind === "question" && m.task_id) lastQuestionId.set(m.task_id, m.id);
 
   async function send(text: string) {
-    if (!text.trim() || sending) return;
+    const documentIds = attachments.filter((a) => a.id).map((a) => a.id!);
+    const documents = attachments.filter((a) => a.id).map((a) => ({ id: a.id!, name: a.name }));
+    if ((!text.trim() && !documentIds.length) || sending || uploading) return;
     setSending(true);
     setInput("");
+    setAttachments([]);
     setStreaming({ text: "", tools: [] });
     const now = () => new Date().toISOString();
     let full = "";
@@ -86,7 +117,7 @@ export function Chat({
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, document_ids: documentIds }),
       });
       if (!res.ok || !res.body) {
         const err = await res.json().catch(() => null);
@@ -108,7 +139,7 @@ export function Chat({
           const ev = JSON.parse(line);
           if (ev.t === "user") {
             userMessageId = ev.id;
-            onMessage({ id: ev.id, user_id: profile.user_id, role: "user", content: text, task_id: null, meta: null, created_at: now() });
+            onMessage({ id: ev.id, user_id: profile.user_id, role: "user", content: text || "Bekijk de bijgevoegde documenten.", task_id: null, meta: documents.length ? { documents } : null, created_at: now() });
           } else if (ev.t === "text") {
             full += ev.d;
             setStreaming((s) => (s ? { ...s, text: s.text + ev.d } : s));
@@ -170,6 +201,13 @@ export function Chat({
                   <div className="max-w-[85%] rounded-2xl rounded-br-md bg-accent/20 border border-accent/30 px-4 py-2.5 whitespace-pre-wrap break-words">
                     {m.meta?.kind === "answer" && <div className="text-[11px] text-muted mb-0.5">antwoord op vraag</div>}
                     {m.content}
+                    {!!m.meta?.documents?.length && (
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {m.meta.documents.map((d) => (
+                          <span key={d.id} className="text-[11px] rounded-full bg-panel/60 border border-line px-2 py-0.5">📎 {d.name}</span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -236,9 +274,44 @@ export function Chat({
           e.preventDefault();
           send(input);
         }}
-        className="border-t border-line p-3"
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          addFiles(e.dataTransfer.files);
+        }}
+        className={`border-t border-line p-3 ${dragging ? "bg-accent/10" : ""}`}
       >
+        {attachments.length > 0 && (
+          <div className="max-w-2xl mx-auto flex flex-wrap gap-1.5 mb-2">
+            {attachments.map((a) => (
+              <span
+                key={a.key}
+                className={`text-xs rounded-full border px-2.5 py-1 flex items-center gap-1.5 ${
+                  a.failed ? "border-bad/50 text-bad" : a.id ? "border-line" : "border-line text-muted"
+                }`}
+              >
+                📎 <span className="max-w-[12rem] truncate">{a.name}</span>
+                <span className="text-muted">· {a.status}</span>
+                <button type="button" onClick={() => setAttachments((l) => l.filter((x) => x.key !== a.key))} className="hover:text-fg" aria-label="Verwijder bijlage">✕</button>
+              </span>
+            ))}
+          </div>
+        )}
         <div className="max-w-2xl mx-auto flex gap-2 items-end">
+          <input ref={fileRef} type="file" multiple className="hidden" onChange={(e) => addFiles(e.target.files)} />
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            title="Bestand toevoegen (of sleep het hierheen)"
+            className="rounded-xl border border-line px-3 py-2.5 hover:bg-panel"
+          >
+            📎
+          </button>
           <textarea
             ref={inputRef}
             value={input}
@@ -254,7 +327,7 @@ export function Chat({
             className="flex-1 min-w-0 resize-none max-h-40 rounded-xl bg-panel border border-line px-4 py-2.5 outline-none focus:border-accent"
           />
           <button
-            disabled={sending || !input.trim()}
+            disabled={sending || uploading || (!input.trim() && !attachments.some((a) => a.id))}
             className="rounded-xl bg-accent text-white px-4 py-2.5 font-medium disabled:opacity-40 hover:brightness-110"
           >
             Stuur

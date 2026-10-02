@@ -22,6 +22,8 @@ GonkaRouter (OpenAI-compatibel, via het `openai`-pakket) · Gmail API · Vercel
 | 7 | **Controls**: pauzeren, taken annuleren, audit-log, tokenbudget en stappenlimiet. | links + Audit-log |
 | 8 | **Verbindingen**: koppel je eigen Gmail en Google Agenda (OAuth, PKCE, versleutelde tokens). Drive volgt. | `/connections` |
 | 9 | **Push-meldingen**: seintje bij een goedkeuring, een vraag, een klare of mislukte taak, of een verlopen verbinding. | 🔔 links |
+| 10 | **Documenten**: elk bestand meesturen in de chat of uploaden; de dot leest PDF, Word, Excel, PowerPoint, tekst, code en afbeeldingen (OCR), kan ze vastzetten als achtergrond en als bijlage mailen. | 📎 + Documenten |
+| 11 | **Diagnose**: één knop die instellingen, migraties en verbindingen controleert en zegt hoe je iets oplost. | Verbindingen |
 
 ---
 
@@ -130,6 +132,7 @@ supabase/
   migrations/0002_caura.sql            caura_id op geheugennotities
   migrations/0003_gonka_connectors.sql tokenbudget, connectors, pending_actions, reply_to, step_count
   migrations/0004_push_calendar.sql    push-abonnementen, actietype calendar_create_event
+  migrations/0005_documents.sql        documenten-tabel en privé opslag-bucket
   cron.sql                             pg_cron heartbeat
 src/
   instrumentation.ts                   modelcontrole bij opstarten
@@ -158,7 +161,7 @@ scripts/                               PowerShell-checks tegen GonkaRouter
 
 ### 1. Supabase
 
-Voer in de **SQL Editor** in volgorde uit: `0001_langdot.sql`, `0002_caura.sql`, `0003_gonka_connectors.sql`, `0004_push_calendar.sql`.
+Voer in de **SQL Editor** in volgorde uit: `0001_langdot.sql`, `0002_caura.sql`, `0003_gonka_connectors.sql`, `0004_push_calendar.sql`, `0005_documents.sql`.
 Zet onder **Authentication → URL Configuration** je Vercel-URL als Site URL en voeg
 `https://<jouw-app>/auth/callback` toe aan de Redirect URLs.
 
@@ -265,6 +268,29 @@ Je krijgt een melding bij: een mail of afspraak die op goedkeuring wacht, een vr
 klaar of mislukt is, en een verbinding die verlopen is. Niet bij gewone chatantwoorden (dan zit je al in de app).
 Op iPhone/iPad werkt het alleen als je LangDot eerst via **Deel → Zet op beginscherm** installeert.
 
+## Documenten
+
+Gratis: bestanden staan in een privé Supabase Storage-bucket (`documents`, max 25 MB per bestand, gratis tot 1 GB),
+in een map per gebruiker. De tekst wordt op de server eruit gehaald met open-source libraries.
+
+| Type | Hoe |
+|------|-----|
+| PDF | `unpdf` (PDF zonder tekstlaag, zoals een scan, wordt gemeld als niet leesbaar) |
+| Word `.docx` | `mammoth` |
+| Excel `.xlsx/.xls/.ods`, CSV | SheetJS, elk blad apart |
+| PowerPoint `.pptx`, OpenDocument, EPUB | `jszip` |
+| Tekst, Markdown, JSON, XML, HTML, RTF, code | direct |
+| Afbeeldingen | OCR in de browser met tesseract.js (Nederlands + Engels), vóór het uploaden |
+| Audio, video, oude `.doc/.ppt` | opgeslagen, niet gelezen (met uitleg) |
+
+- **In de chat:** 📎 of sleep een bestand in het invoerveld. De tekst gaat mee met je bericht (max 25.000 tekens per
+  document; langer leest de dot met `document_read`).
+- **Documenten-tab:** uploaden, tekst plakken, verwijderen, en **vastzetten**. Vastgezette documenten gaan als achtergrond
+  mee in elke prompt (max 16.000 tekens samen); handig voor een "Over mij"-profiel.
+- **Als bijlage mailen:** de dot geeft document-id's mee aan `gmail_create_draft`; de goedkeuringskaart toont de bijlagen.
+  Max 5 bijlagen en 15 MB samen. Alleen eigen documenten; de inhoud wordt pas na jouw klik geladen.
+- Inhoud van niet-vastgezette documenten is data, geen instructie (zoals webpagina's en mails).
+
 ## Tests
 
 ```bash
@@ -283,6 +309,7 @@ npm test
 | `prompt-and-secrets.test.ts` | voorkeuren in de prompt; geen geheime `NEXT_PUBLIC_`-vars; client-code importeert geen server-modules |
 | `calendar.test.ts` | afspraak-validatie; inplannen alleen na klik; eigen daglimiet; agenda-tools alleen met verbinding |
 | `push.test.ts` | naar alle apparaten, verlopen abonnementen opruimen, nooit een fout naar de agent |
+| `documents.test.ts` | tekst uit txt/html/docx/xlsx/pptx/odt/rtf; onleesbaar met uitleg; mail-MIME met bijlagen; alleen eigen documenten; bijlagen pas na goedkeuring |
 | `tool-calling.test.ts` | LIVE: tool calling en streaming via `lib/llm.ts` |
 
 LIVE-tests draaien alleen als `GONKA_API_KEY` gezet is (lokaal via `.env.local`, in CI via het repository secret

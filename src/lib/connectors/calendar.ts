@@ -14,7 +14,9 @@ async function calFetch(token: string, path: string, init: { method?: string; bo
   if (res.status === 401) throw new ConnectorError("needs_reauth", "calendar 401");
   if (!res.ok) {
     const json = await res.json().catch(() => null);
-    throw new ConnectorError("provider_error", `calendar ${res.status} ${json?.error?.status ?? ""}`);
+    // Reden van Google (bv. accessNotConfigured = Calendar API staat uit, insufficientPermissions = scope ontbreekt).
+    const reason = json?.error?.errors?.[0]?.reason ?? json?.error?.status ?? "";
+    throw new ConnectorError("provider_error", `calendar ${res.status} ${reason}`);
   }
   return res.status === 204 ? null : res.json();
 }

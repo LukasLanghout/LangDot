@@ -3,6 +3,8 @@ import { complete, type ChatMessage } from "@/lib/llm";
 import { ACTIVITY_TOOLS, chatTools, executeTool, parseArgs, type ToolContext } from "./tools";
 import { chatSystemPrompt, loadAgentContext } from "./prompts";
 import type { Message, Step } from "@/lib/types";
+import { readDocument } from "@/lib/documents/store";
+import { wrapUntrusted } from "@/lib/web";
 
 export type ChatEvent =
   | { t: "user"; id: string }
@@ -100,12 +102,37 @@ class ChatActivity {
   }
 }
 
+const ATTACH_MAX_EACH = 25_000;
+const ATTACH_MAX_TOTAL = 50_000;
+
+/** Tekst van bijgevoegde documenten, als onbetrouwbare data achter het bericht. Langere stukken via document_read. */
+async function attachedDocuments(db: SupabaseClient, userId: string, ids: string[]) {
+  if (!ids.length) return "";
+  let budget = ATTACH_MAX_TOTAL;
+  const parts: string[] = [];
+  for (const id of ids) {
+    const doc = await readDocument(userId, id, 0, ATTACH_MAX_EACH, db).catch(() => null);
+    if (!doc) continue;
+    const text = String(doc.text ?? "").slice(0, Math.max(0, budget));
+    budget -= text.length;
+    parts.push(wrapUntrusted(`document:${doc.name}`, {
+      id, name: doc.name, text,
+      status: "status" in doc ? doc.status : "ready",
+      note: "error" in doc && doc.error ? doc.error : undefined,
+      more: "next_offset" in doc && doc.next_offset ? `nog meer tekst: document_read met offset ${doc.next_offset}` : undefined,
+    }));
+  }
+  return parts.length ? `\n\n[Bijgevoegde documenten]\n${parts.join("\n")}` : "";
+}
+
 /** Eén chatbeurt: history laden, tool-loop draaien, tekst live streamen. */
 export async function runChat(opts: {
   db: SupabaseClient;
   userId: string;
   userMessageId: string;
   userText: string;
+  /** Bij dit bericht gevoegde documenten (al gecontroleerd: van deze gebruiker). */
+  documentIds?: string[];
   send: (e: ChatEvent) => void;
 }): Promise<{ text: string; createdTask: boolean; meta: Message["meta"] }> {
   const { db, userId, send } = opts;
@@ -123,7 +150,7 @@ export async function runChat(opts: {
     { role: "system", content: chatSystemPrompt(ctx) },
     ...toHistory(((history ?? []) as { role: string; content: string }[]).reverse()),
     // Het huidige bericht staat altijd als laatste, ook als de worker net iets heeft gepost.
-    { role: "user", content: opts.userText },
+    { role: "user", content: opts.userText + (await attachedDocuments(db, userId, opts.documentIds ?? [])) },
   ];
 
   const toolCtx: ToolContext = { db, userId, taskId: null, origin: "chat", gmail: ctx.gmail, calendar: ctx.calendar, createdActionIds: [] };

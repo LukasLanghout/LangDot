@@ -6,6 +6,7 @@ import { logAudit } from "@/lib/audit";
 import { getAccessToken } from "@/lib/connectors/store";
 import { sendGmail } from "@/lib/connectors/gmail";
 import { createCalendarEvent } from "@/lib/connectors/calendar";
+import { loadAttachment } from "@/lib/documents/store";
 import type { ActionStore, ExecDeps, PendingAction } from "@/lib/actions";
 
 export function supabaseActionStore(db: SupabaseClient = createAdminClient()): ActionStore {
@@ -44,7 +45,8 @@ export function defaultExecDeps(db: SupabaseClient = createAdminClient()): ExecD
   return {
     store: supabaseActionStore(db),
     getAccessToken: (userId, provider) => getAccessToken(userId, provider, db),
-    send: (token, payload) => sendGmail(token, { ...payload, gmailDraftId: payload.gmail_draft_id ?? null }),
+    send: (token, payload, files) => sendGmail(token, { ...payload, gmailDraftId: payload.gmail_draft_id ?? null }, files),
+    loadAttachment: (userId, documentId) => loadAttachment(userId, documentId, db),
     createEvent: (token, payload) => createCalendarEvent(token, payload),
     audit: (entry) => logAudit(db, { ...entry, actor: "system" }),
   };

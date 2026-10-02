@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
-import type { ActionRow, AuditEntry, Memory, Message, Profile, Schedule, Task } from "@/lib/types";
+import type { ActionRow, AuditEntry, DocumentRow, Memory, Message, Profile, Schedule, Task } from "@/lib/types";
 import { DotAvatar } from "./DotAvatar";
 import { Chat } from "./Chat";
 import { ActivityPanel } from "./ActivityPanel";
@@ -13,6 +13,7 @@ import { MemoryPanel } from "./MemoryPanel";
 import { SchedulePanel } from "./SchedulePanel";
 import { AuditPanel } from "./AuditPanel";
 import { PushToggle } from "./PushToggle";
+import { DocumentsPanel } from "./DocumentsPanel";
 
 type Initial = {
   messages: Message[];
@@ -20,10 +21,11 @@ type Initial = {
   memories: Memory[];
   schedules: Schedule[];
   actions: ActionRow[];
+  documents: DocumentRow[];
   audit: AuditEntry[];
 };
 
-type Tab = "activity" | "memory" | "scheduled" | "audit";
+type Tab = "activity" | "memory" | "documents" | "scheduled" | "audit";
 type Row = { id: string | number };
 
 /** Voegt een rij toe of vervangt hem (op id), en sorteert. */
@@ -59,6 +61,7 @@ export function AppShell({
   const [memories, setMemories] = useState(initial.memories);
   const [schedules, setSchedules] = useState(initial.schedules);
   const [actions, setActions] = useState(initial.actions);
+  const [documents, setDocuments] = useState(initial.documents);
   const [audit, setAudit] = useState(initial.audit);
   const [tab, setTab] = useState<Tab>("activity");
   const [mobileView, setMobileView] = useState<"chat" | "panel">("chat");
@@ -90,6 +93,10 @@ export function AppShell({
           p.eventType === "DELETE"
             ? setSchedules((l) => l.filter((x) => x.id !== p.old.id))
             : setSchedules((l) => upsert(l, p.new as Schedule, byCreatedAsc)),
+        documents: (p) =>
+          p.eventType === "DELETE"
+            ? setDocuments((l) => l.filter((x) => x.id !== p.old.id))
+            : setDocuments((l) => upsert(l, p.new as DocumentRow, byCreatedDesc, 100)),
         pending_actions: (p) =>
           p.eventType === "DELETE"
             ? setActions((l) => l.filter((x) => x.id !== p.old.id))
@@ -156,6 +163,7 @@ export function AppShell({
   const tabs: { id: Tab; label: string; count?: number }[] = [
     { id: "activity", label: "Activity", count: waiting.length || undefined },
     { id: "memory", label: "Geheugen" },
+    { id: "documents", label: "Documenten" },
     { id: "scheduled", label: "Gepland" },
     { id: "audit", label: "Audit-log" },
   ];
@@ -246,6 +254,7 @@ export function AppShell({
         <div className="flex-1 min-h-0 overflow-y-auto p-3">
           {tab === "activity" && <ActivityPanel tasks={tasks} actions={actions} paused={profile.paused} />}
           {tab === "memory" && <MemoryPanel memories={memories} cauraFleet={cauraFleet} />}
+          {tab === "documents" && <DocumentsPanel userId={userId} documents={documents} />}
           {tab === "scheduled" && <SchedulePanel userId={userId} schedules={schedules} />}
           {tab === "audit" && <AuditPanel entries={audit} />}
         </div>

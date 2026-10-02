@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { PROVIDERS, type ProviderInfo } from "@/lib/connectors/registry";
 import type { ConnectorRow } from "@/lib/types";
 import { formatTime } from "./ui";
+import { DiagnosePanel } from "./DiagnosePanel";
 
 const ERRORS: Record<string, string> = {
   state: "De koppeling kon niet veilig worden afgerond (sessie verlopen of ongeldige link). Probeer het opnieuw.",
@@ -109,6 +110,7 @@ export function ConnectionsView({ connectors, connected, error }: { connectors: 
         {connected && <div className="rounded-lg border border-ok/40 bg-ok/10 text-ok text-sm px-3 py-2">Verbonden! Je dot kan nu met {PROVIDERS.find((p) => p.id === connected)?.label ?? "deze dienst"} werken.</div>}
         {error && <div className="rounded-lg border border-bad/40 bg-bad/10 text-bad text-sm px-3 py-2">{ERRORS[error] ?? "Er ging iets mis bij het koppelen."}</div>}
         {PROVIDERS.map((p) => <Card key={p.id} info={p} connector={connectors.find((c) => c.provider === p.id)} />)}
+        <DiagnosePanel />
       </div>
     </main>
   );

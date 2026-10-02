@@ -5,6 +5,7 @@ import { runChat, type ChatEvent } from "@/lib/agent/chat";
 import { runWorker } from "@/lib/agent/worker";
 import { logAudit } from "@/lib/audit";
 import { LlmError, userSafeMessage } from "@/lib/llm-errors";
+import { getDocuments } from "@/lib/documents/store";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -15,13 +16,22 @@ export async function POST(req: Request) {
   if (!user) return Response.json({ error: "Niet ingelogd" }, { status: 401 });
 
   const body = await req.json().catch(() => null);
-  const message = typeof body?.message === "string" ? body.message.trim().slice(0, 4000) : "";
+  const requestedDocs: string[] = Array.isArray(body?.document_ids) ? body.document_ids.map(String).slice(0, 5) : [];
+  const db = createAdminClient();
+  // Alleen eigen documenten; andermans of onbekende id's vallen weg.
+  const docs = requestedDocs.length ? await getDocuments(user.id, requestedDocs, db) : [];
+  const typed = typeof body?.message === "string" ? body.message.trim().slice(0, 4000) : "";
+  const message = typed || (docs.length ? "Bekijk de bijgevoegde documenten." : "");
   if (!message) return Response.json({ error: "Leeg bericht" }, { status: 400 });
 
-  const db = createAdminClient();
   const { data: saved, error } = await db
     .from("dot_messages")
-    .insert({ user_id: user.id, role: "user", content: message })
+    .insert({
+      user_id: user.id,
+      role: "user",
+      content: message,
+      meta: docs.length ? { documents: docs.map((d) => ({ id: d.id, name: d.name })) } : {},
+    })
     .select("id")
     .single();
   if (error) {
@@ -50,7 +60,7 @@ export async function POST(req: Request) {
       send({ t: "user", id: saved.id });
       let createdTask = false;
       try {
-        const result = await runChat({ db, userId: user.id, userMessageId: saved.id, userText: message, send });
+        const result = await runChat({ db, userId: user.id, userMessageId: saved.id, userText: message, documentIds: docs.map((d) => d.id), send });
         createdTask = result.createdTask;
         const text = result.text.trim() || "…";
         const { data: reply } = await db

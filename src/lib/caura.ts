@@ -53,6 +53,11 @@ async function call(
 
 const tenant = () => process.env.CAURA_TENANT_ID!;
 
+/** LangDot-soorten → Caura memory_type (Caura kent geen "work"; gezien als HTTP 422 in de logs). */
+export function cauraType(kind: string) {
+  return ({ preference: "preference", decision: "decision", fact: "fact", work: "task" } as Record<string, string>)[kind] ?? "fact";
+}
+
 /** Schrijft een notitie naar Caura en geeft het Caura-id terug (of null bij een fout). */
 export async function cauraWrite(p: { userId: string; agentId: string; content: string; kind: string; localId: string }) {
   if (!cauraEnabled()) return null;
@@ -63,7 +68,7 @@ export async function cauraWrite(p: { userId: string; agentId: string; content: 
         fleet_id: fleetFor(p.userId),
         agent_id: p.agentId,
         content: p.content,
-        memory_type: p.kind,
+        memory_type: cauraType(p.kind),
         visibility: "scope_team", // gedeeld binnen de fleet
         metadata: { source: "langdot", langdot_id: p.localId },
       },
@@ -80,7 +85,7 @@ export async function cauraUpdate(p: { agentId: string; cauraId: string; content
   try {
     await call("PATCH", `/memories/${encodeURIComponent(p.cauraId)}`, {
       query: { tenant_id: tenant(), agent_id: p.agentId },
-      body: { content: p.content, memory_type: p.kind },
+      body: { content: p.content, memory_type: cauraType(p.kind) },
     });
   } catch (e) {
     console.error("caura update failed", e);

@@ -29,7 +29,16 @@ type ActionBase = {
 };
 
 export type ActionRow =
-  | (ActionBase & { type: "gmail_send"; payload: { to: string[]; subject: string; body: string; gmail_draft_id?: string | null } })
+  | (ActionBase & {
+      type: "gmail_send";
+      payload: {
+        to: string[];
+        subject: string;
+        body: string;
+        gmail_draft_id?: string | null;
+        attachments?: { document_id: string; name: string; mime: string; size: number }[];
+      };
+    })
   | (ActionBase & {
       type: "calendar_create_event";
       payload: {
@@ -101,6 +110,7 @@ export type Message = {
     options?: Option[];
     action_ids?: string[];
     provider?: string;
+    documents?: { id: string; name: string }[];
   } | null;
   created_at: string;
 };
@@ -143,3 +153,17 @@ export type AuditEntry = {
 };
 
 export const ACTIVE_STATUSES: TaskStatus[] = ["pending", "running", "needs_input"];
+
+export type DocumentRow = {
+  id: string;
+  user_id: string;
+  name: string;
+  mime: string;
+  size: number;
+  storage_path: string | null;
+  text_chars: number;
+  status: "ready" | "unsupported" | "failed";
+  error: string | null;
+  pinned: boolean;
+  created_at: string;
+};

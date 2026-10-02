@@ -6,6 +6,7 @@ import { htmlToText } from "@/lib/web";
 const API = "https://gmail.googleapis.com/gmail/v1/users/me";
 
 export type OutgoingMail = { to: string[]; subject: string; body: string };
+export type MailFile = { name: string; mime: string; data: Buffer };
 
 function assertHeaderSafe(v: string) {
   if (/[\r\n]/.test(v)) throw new ConnectorError("provider_error", "header bevat regeleinde");
@@ -16,20 +17,46 @@ function encodeHeader(v: string) {
   return /^[\x20-\x7e]*$/.test(v) ? v : `=?UTF-8?B?${Buffer.from(v, "utf8").toString("base64")}?=`;
 }
 
-/** Bouwt een RFC 2822-bericht (text/plain, UTF-8) en geeft het base64url-gecodeerd terug. */
-export function buildRawMessage(mail: OutgoingMail) {
+const b64lines = (buf: Buffer) => buf.toString("base64").replace(/.{1,76}/g, "$&\r\n");
+
+/** Bestandsnaam voor de Content-Disposition (RFC 2231 voor niet-ASCII). */
+function filenameParam(name: string) {
+  const safe = name.replace(/[\r\n"\\]/g, "_");
+  return /^[\x20-\x7e]*$/.test(safe) ? `filename="${safe}"` : `filename*=UTF-8''${encodeURIComponent(safe)}`;
+}
+
+/** Bouwt een RFC 2822-bericht: text/plain, of multipart/mixed met bijlagen. */
+export function buildMime(mail: OutgoingMail, files: MailFile[] = []) {
   mail.to.forEach(assertHeaderSafe);
-  const body = Buffer.from(mail.body, "utf8").toString("base64").replace(/.{1,76}/g, "$&\r\n");
-  const lines = [
-    `To: ${mail.to.join(", ")}`,
-    `Subject: ${encodeHeader(mail.subject)}`,
-    "MIME-Version: 1.0",
-    "Content-Type: text/plain; charset=UTF-8",
-    "Content-Transfer-Encoding: base64",
+  const headers = [`To: ${mail.to.join(", ")}`, `Subject: ${encodeHeader(mail.subject)}`, "MIME-Version: 1.0"];
+  const textPart = ["Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", b64lines(Buffer.from(mail.body, "utf8"))];
+  if (!files.length) return [...headers, ...textPart].join("\r\n");
+
+  const boundary = `langdot_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+  const parts = [
+    ...headers,
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
     "",
-    body,
+    `--${boundary}`,
+    ...textPart,
   ];
-  return Buffer.from(lines.join("\r\n"), "utf8").toString("base64url");
+  for (const f of files) {
+    const mime = /^[\w.+-]+\/[\w.+-]+$/.test(f.mime) ? f.mime : "application/octet-stream";
+    parts.push(
+      `--${boundary}`,
+      `Content-Type: ${mime}`,
+      "Content-Transfer-Encoding: base64",
+      `Content-Disposition: attachment; ${filenameParam(f.name)}`,
+      "",
+      b64lines(f.data),
+    );
+  }
+  parts.push(`--${boundary}--`, "");
+  return parts.join("\r\n");
+}
+
+export function buildRawMessage(mail: OutgoingMail, files: MailFile[] = []) {
+  return Buffer.from(buildMime(mail, files), "utf8").toString("base64url");
 }
 
 async function gmailFetch(token: string, path: string, init: { method?: string; body?: string } = {}) {
@@ -46,7 +73,7 @@ async function gmailFetch(token: string, path: string, init: { method?: string; 
   return res.status === 204 ? null : res.json();
 }
 
-/** Zet een concept in Gmail › Concepten (scope gmail.compose). */
+/** Zet een concept in Gmail › Concepten (scope gmail.compose). Alleen voor mails zonder bijlagen. */
 export async function createGmailDraft(token: string, mail: OutgoingMail): Promise<string> {
   const json = await gmailFetch(token, "/drafts", {
     method: "POST",
@@ -55,11 +82,31 @@ export async function createGmailDraft(token: string, mail: OutgoingMail): Promi
   return String(json.id);
 }
 
+/** Versturen via het upload-endpoint (tot 35 MB), nodig voor bijlagen. */
+async function sendViaUpload(token: string, mime: string) {
+  const res = await fetch("https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "message/rfc822" },
+    body: mime,
+  });
+  if (res.status === 401) throw new ConnectorError("needs_reauth", "gmail 401");
+  if (!res.ok) {
+    const json = await res.json().catch(() => null);
+    throw new ConnectorError("provider_error", `gmail upload ${res.status} ${json?.error?.status ?? ""}`);
+  }
+  return String((await res.json()).id);
+}
+
 /**
- * Verstuurt een mail. Bestaat er een Gmail-concept, dan wordt dat eerst bijgewerkt met de
- * (mogelijk bewerkte) goedgekeurde tekst en daarna verstuurd, zodat er geen oud concept achterblijft.
+ * Verstuurt een mail. Met bijlagen via het upload-endpoint. Zonder bijlagen en met een Gmail-concept:
+ * concept eerst bijwerken met de (mogelijk bewerkte) goedgekeurde tekst en dan versturen.
  */
-export async function sendGmail(token: string, mail: OutgoingMail & { gmailDraftId?: string | null }): Promise<string> {
+export async function sendGmail(
+  token: string,
+  mail: OutgoingMail & { gmailDraftId?: string | null },
+  files: MailFile[] = [],
+): Promise<string> {
+  if (files.length) return sendViaUpload(token, buildMime(mail, files));
   const raw = buildRawMessage(mail);
   if (mail.gmailDraftId) {
     try {
@@ -77,7 +124,6 @@ export async function sendGmail(token: string, mail: OutgoingMail & { gmailDraft
   const sent = await gmailFetch(token, "/messages/send", { method: "POST", body: JSON.stringify({ raw }) });
   return String(sent.id);
 }
-
 export type MailSummary = { id: string; from: string; subject: string; date: string; snippet: string };
 
 export async function searchGmail(token: string, query: string, max = 5): Promise<MailSummary[]> {
