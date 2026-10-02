@@ -99,6 +99,8 @@ export async function cauraDelete(p: { agentId: string; cauraId: string }) {
       query: { tenant_id: tenant(), agent_id: p.agentId },
     });
   } catch (e) {
+    // 404 = staat niet (meer) in Caura; dan is het doel (weg) al bereikt.
+    if (e instanceof Error && e.message.includes("HTTP 404")) return;
     console.error("caura delete failed", e);
   }
 }

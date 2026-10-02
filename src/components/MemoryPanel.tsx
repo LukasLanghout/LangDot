@@ -63,6 +63,8 @@ export function MemoryPanel({ memories, cauraFleet }: { memories: Memory[]; caur
   const [newKind, setNewKind] = useState<MemoryKind>("preference");
   const [filter, setFilter] = useState<MemoryKind | "all">("all");
   const [error, setError] = useState<string | null>(null);
+  // Meteen uit de lijst halen bij verwijderen; niet wachten op realtime (voorkomt dubbel klikken).
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
 
   // Via de server: die houdt het audit-log bij en synchroniseert met Caura.
   async function api(method: "POST" | "PATCH" | "DELETE", body?: unknown, query = "") {
@@ -91,10 +93,22 @@ export function MemoryPanel({ memories, cauraFleet }: { memories: Memory[]; caur
   }
 
   async function remove(m: Memory) {
-    await api("DELETE", undefined, `?id=${encodeURIComponent(m.id)}`);
+    setError(null);
+    setHidden((h) => new Set(h).add(m.id));
+    const res = await fetch(`/api/memories?id=${encodeURIComponent(m.id)}`, { method: "DELETE" });
+    // 404 = al verwijderd: prima. Andere fout: terugzetten en melden.
+    if (!res.ok && res.status !== 404) {
+      setHidden((h) => {
+        const n = new Set(h);
+        n.delete(m.id);
+        return n;
+      });
+      setError((await res.json().catch(() => null))?.error ?? `Verwijderen mislukt (HTTP ${res.status})`);
+    }
   }
 
-  const shown = filter === "all" ? memories : memories.filter((m) => m.kind === filter);
+  const visible = memories.filter((m) => !hidden.has(m.id));
+  const shown = filter === "all" ? visible : visible.filter((m) => m.kind === filter);
 
   return (
     <div className="space-y-3">

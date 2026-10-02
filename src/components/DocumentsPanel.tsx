@@ -21,6 +21,7 @@ export function DocumentsPanel({ userId, documents }: { userId: string; document
   const [pasteName, setPasteName] = useState("Over mij");
   const [pasteText, setPasteText] = useState("");
   const [pastePinned, setPastePinned] = useState(true);
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
 
   async function upload(files: FileList | null) {
     if (!files?.length) return;
@@ -61,8 +62,19 @@ export function DocumentsPanel({ userId, documents }: { userId: string; document
 
   async function remove(d: DocumentRow) {
     if (!confirm(`"${d.name}" verwijderen?`)) return;
-    await fetch(`/api/documents/${d.id}`, { method: "DELETE" });
+    setHidden((h) => new Set(h).add(d.id));
+    const res = await fetch(`/api/documents/${d.id}`, { method: "DELETE" });
+    if (!res.ok && res.status !== 404) {
+      setHidden((h) => {
+        const n = new Set(h);
+        n.delete(d.id);
+        return n;
+      });
+      setError(`"${d.name}" verwijderen mislukt.`);
+    }
   }
+
+  const visibleDocs = documents.filter((d) => !hidden.has(d.id));
 
   return (
     <div className="space-y-3">
@@ -98,11 +110,11 @@ export function DocumentsPanel({ userId, documents }: { userId: string; document
       {status && <p className="text-xs text-muted">⏳ {status}</p>}
       {error && <p className="text-xs text-bad">{error}</p>}
 
-      {documents.length === 0 ? (
+      {visibleDocs.length === 0 ? (
         <p className="text-sm text-muted">Nog geen documenten.</p>
       ) : (
         <ul className="space-y-2">
-          {documents.map((d) => (
+          {visibleDocs.map((d) => (
             <li key={d.id} className={`rounded-lg border p-2.5 ${d.pinned ? "border-accent/50 bg-accent/5" : "border-line bg-panel-2"}`}>
               <div className="flex items-center gap-2">
                 <span className="font-medium text-sm truncate flex-1" title={d.name}>{d.pinned && "📌 "}{d.name}</span>

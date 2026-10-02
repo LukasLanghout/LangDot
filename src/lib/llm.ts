@@ -73,24 +73,30 @@ function getClient() {
 // ───────────────────────────── Modelcontrole ─────────────────────────────
 
 let modelCheck: Promise<void> | null = null;
+let modelCheckRetryAt = 0;
 
 /**
  * Controleert (één keer per serverinstantie) via GET /models dat GONKA_MODEL en eventuele
  * fallbacks bestaan. Kiest NOOIT zelf een ander model.
+ * Is /models traag of onbereikbaar, dan blokkeert dat niets: na 10 minuten wordt opnieuw gecontroleerd.
  */
 export function verifyModels(): Promise<void> {
+  if (modelCheck && modelCheckRetryAt && Date.now() > modelCheckRetryAt) {
+    modelCheck = null;
+    modelCheckRetryAt = 0;
+  }
   if (!modelCheck) {
     modelCheck = (async () => {
       const cfg = llmConfig();
       let ids: Set<string>;
       try {
-        const list: any = await getClient().models.list();
+        // Korte timeout (gezien: 60 s timeout bij een koude start). Als methode aanroepen i.v.m. `this`.
+        const list: any = await (getClient().models as any).list({ timeout: 5_000 });
         ids = new Set(((list?.data ?? []) as { id: string }[]).map((m) => m.id));
       } catch (e) {
         if (e instanceof LlmError) throw e;
-        // Controle zelf lukte niet (netwerk): niet blokkeren, volgende aanroep probeert opnieuw.
-        console.warn("[llm] GET /models kon niet worden opgehaald:", describe(e));
-        modelCheck = null;
+        console.warn("[llm] GET /models kon niet worden opgehaald (controle overgeslagen):", describe(e));
+        modelCheckRetryAt = Date.now() + 10 * 60_000;
         return;
       }
       for (const m of [cfg.model, ...cfg.fallbacks]) {
