@@ -179,6 +179,8 @@ export async function runChat(opts: {
         },
       });
 
+      // Opgeschoonde tekst van deze ronde (zonder redenering of dubbeling) i.p.v. de ruwe stream.
+      if (roundText.trim() || result.content) roundText = result.content;
       if (!result.toolCalls.length || last) break;
       if (roundText.trim()) interimText = roundText;
 

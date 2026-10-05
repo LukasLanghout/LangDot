@@ -38,6 +38,10 @@ export async function GET() {
     const { error } = await db.from(table).select("*", { count: "exact", head: true }).limit(1);
     add({ name: `Tabel ${table}`, ok: !error, detail: error ? "ontbreekt" : "aanwezig", fix: `Voer migratie ${migration} uit in de Supabase SQL Editor.` });
   }
+  {
+    const { error } = await db.from("dot_schedules").select("auto_send, auto_send_to").limit(1);
+    add({ name: "Automatisch mailen (schema's)", ok: !error, detail: error ? "kolommen ontbreken" : "aanwezig", fix: "Voer migratie 0006_auto_send.sql uit." });
+  }
   // Mag een afspraak-voorstel opgeslagen worden? (check constraint uit migratie 0004)
   {
     const { data, error } = await db.from("pending_actions")

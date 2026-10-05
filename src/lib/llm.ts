@@ -136,7 +136,23 @@ export function stripThink(text: string) {
     const m = rest.match(/\n{3,}/);
     t = t.slice(0, open) + (m && m.index !== undefined ? rest.slice(m.index + m[0].length) : "");
   }
-  return t.split("</think>").join("").trim();
+  // Losse sluittag zonder opening ("concept</think>antwoord"): alles ervoor was redenering.
+  const orphan = t.lastIndexOf("</think>");
+  if (orphan >= 0) t = t.slice(orphan + 8);
+  return collapseRepeat(t.trim());
+}
+
+/** Vangnet: "A A" of "A\n\nA" (hetzelfde antwoord twee keer achter elkaar) wordt "A". */
+export function collapseRepeat(text: string) {
+  const t = text.trim();
+  if (t.length < 20) return t;
+  for (let cut = Math.floor(t.length / 2) - 3; cut <= Math.ceil(t.length / 2) + 3; cut++) {
+    if (cut <= 0 || cut >= t.length) continue;
+    const a = t.slice(0, cut).trim();
+    const b = t.slice(cut).trim();
+    if (a.length >= 10 && a === b) return a;
+  }
+  return t;
 }
 
 function partialSuffix(s: string, tag: string) {
@@ -325,6 +341,7 @@ async function streamOnce(model: string, opts: CompleteOptions, state: { emitted
   const filter = new ThinkFilter();
   const calls: any[] = [];
   let content = "";
+  let raw = "";
   let usage: any = null;
   let served: string | undefined;
 
@@ -343,7 +360,10 @@ async function streamOnce(model: string, opts: CompleteOptions, state: { emitted
     if (chunk?.usage) usage = chunk.usage;
     const delta = chunk?.choices?.[0]?.delta;
     if (!delta) continue;
-    if (typeof delta.content === "string" && delta.content) emit(filter.push(delta.content));
+    if (typeof delta.content === "string" && delta.content) {
+      raw += delta.content;
+      emit(filter.push(delta.content));
+    }
     if (Array.isArray(delta.tool_calls)) {
       for (const tc of delta.tool_calls) {
         const i: number = typeof tc.index === "number" ? tc.index : calls.length;
@@ -357,7 +377,10 @@ async function streamOnce(model: string, opts: CompleteOptions, state: { emitted
   emit(filter.flush());
 
   const toolCalls = normalizeCalls(calls);
-  return { content: content.trim(), toolCalls, usage: toUsage(usage, opts, content + JSON.stringify(toolCalls)), model: served ?? model };
+  // De definitieve tekst komt uit de ruwe stream (vangt ook een ontbrekende <think>-opening en dubbele antwoorden);
+  // de gebruiker zag tijdens het streamen een benadering, de chat vervangt die door deze tekst.
+  const finalText = stripThink(raw) || content.trim();
+  return { content: finalText, toolCalls, usage: toUsage(usage, opts, content + JSON.stringify(toolCalls)), model: served ?? model };
 }
 
 /**
