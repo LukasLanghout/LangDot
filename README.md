@@ -133,6 +133,7 @@ supabase/
   migrations/0003_gonka_connectors.sql tokenbudget, connectors, pending_actions, reply_to, step_count
   migrations/0004_push_calendar.sql    push-abonnementen, actietype calendar_create_event
   migrations/0005_documents.sql        documenten-tabel en privé opslag-bucket
+  migrations/0006_auto_send.sql        staande toestemming: schema's die automatisch naar jezelf mailen
   cron.sql                             pg_cron heartbeat
 src/
   instrumentation.ts                   modelcontrole bij opstarten
@@ -161,7 +162,7 @@ scripts/                               PowerShell-checks tegen GonkaRouter
 
 ### 1. Supabase
 
-Voer in de **SQL Editor** in volgorde uit: `0001_langdot.sql`, `0002_caura.sql`, `0003_gonka_connectors.sql`, `0004_push_calendar.sql`, `0005_documents.sql`.
+Voer in de **SQL Editor** in volgorde uit: `0001_langdot.sql`, `0002_caura.sql`, `0003_gonka_connectors.sql`, `0004_push_calendar.sql`, `0005_documents.sql`, `0006_auto_send.sql`.
 Zet onder **Authentication → URL Configuration** je Vercel-URL als Site URL en voeg
 `https://<jouw-app>/auth/callback` toe aan de Redirect URLs.
 
@@ -267,6 +268,21 @@ Gratis web push met VAPID, zonder externe dienst.
 Je krijgt een melding bij: een mail of afspraak die op goedkeuring wacht, een vraag van de dot, een achtergrondtaak die
 klaar of mislukt is, en een verbinding die verlopen is. Niet bij gewone chatantwoorden (dan zit je al in de app).
 Op iPhone/iPad werkt het alleen als je LangDot eerst via **Deel → Zet op beginscherm** installeert.
+
+## Automatisch mailen naar jezelf (staande toestemming)
+
+Voor terugkerende mails aan jezelf, zoals "stuur me elke werkdag om 8:20 en 12:30 het technieuws", hoef je niet
+elke keer te klikken:
+
+1. Je vraagt het in de chat. De dot maakt de schema's aan (`create_schedule` met `auto_send_to_self`).
+2. Je krijgt **eenmalig** een toestemmingskaart (🔁 *Toestaan* / *Afwijzen*) voor al die schema's samen.
+3. Na *Toestaan* verstuurt de dot op die momenten de mail direct, zonder kaart.
+
+Grenzen, afgedwongen in code (`approveByStandingPermission`, `standingPermission` in de worker):
+- Alleen naar het adres waarmee je Gmail is verbonden. Staat er één andere ontvanger bij, dan wordt het gewoon weer een kaart.
+- Alleen voor taken uit een schema waarop jij de toestemming gaf; nooit vanuit de chat.
+- De daglimiet voor mails blijft gelden; in het audit-log staat `approved_by: standing`.
+- Intrekken: **Gepland** → "intrekken" bij het schema.
 
 ## Documenten
 
