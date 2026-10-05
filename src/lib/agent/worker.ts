@@ -226,6 +226,7 @@ async function executeStep(db: SupabaseClient, task: Task, deadline: number) {
   const ctx = await loadAgentContext(db, task.user_id);
   const toolCtx: ToolContext = {
     db, userId: task.user_id, taskId: task.id, origin: "worker", gmail: ctx.gmail, calendar: ctx.calendar, createdActionIds: [],
+    standing: await standingPermission(db, task, ctx.gmail.email),
   };
   const tools = workerTools(toolCtx);
   const messages: ChatMessage[] = [
@@ -271,6 +272,19 @@ async function executeStep(db: SupabaseClient, task: Task, deadline: number) {
   messages.push({ role: "user", content: "Je tool-budget voor deze stap is op. Vat nu het resultaat van deze stap samen." });
   const final = await taskComplete(db, task, { messages, tools, toolChoice: "none" });
   return completeStep(db, task, index, final.content || "Stap afgerond (tool-budget op).");
+}
+
+/**
+ * Staande toestemming voor deze taak: alleen als de taak uit een schema komt waarop de gebruiker
+ * zelf auto_send heeft toegestaan, en het toegestane adres nog steeds zijn verbonden Gmail-adres is.
+ */
+async function standingPermission(db: SupabaseClient, task: Task, gmailEmail: string | null) {
+  if (task.source !== "schedule" || !task.schedule_id || !gmailEmail) return null;
+  const { data } = await db.from("dot_schedules").select("id, auto_send, auto_send_to")
+    .eq("id", task.schedule_id).eq("user_id", task.user_id).maybeSingle();
+  if (!data?.auto_send || !data.auto_send_to) return null;
+  if (String(data.auto_send_to).toLowerCase() !== gmailEmail.toLowerCase()) return null;
+  return { scheduleId: data.id as string, to: String(data.auto_send_to) };
 }
 
 async function completeStep(db: SupabaseClient, task: Task, index: number, result: string) {

@@ -32,6 +32,17 @@ function ScheduleRow({ s, onUpdate, onDelete }: {
         </label>
       </div>
       <div className="text-[13px] mt-2 text-muted line-clamp-3">“{s.prompt}”</div>
+      {s.auto_send && (
+        <div className="mt-2 flex items-center gap-2 text-xs rounded-lg border border-accent/40 bg-accent/10 px-2 py-1">
+          <span>🔁 Mailt automatisch naar {s.auto_send_to}</span>
+          <button
+            onClick={() => confirm("Toestemming intrekken? Daarna krijg je per mail weer een goedkeuringskaart.") && onUpdate(s, { auto_send: false })}
+            className="ml-auto text-muted hover:text-bad"
+          >
+            intrekken
+          </button>
+        </div>
+      )}
 
       {editing ? (
         <div className="mt-3 space-y-2">

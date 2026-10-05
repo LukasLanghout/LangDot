@@ -27,6 +27,10 @@ export type ToolContext = {
   createdActionIds: string[];
   /** Gezet door request_connection: de chat toont dan een "verbinden"-knop. */
   connectRequest?: string | null;
+  /** Schema's in deze beurt waarvoor om automatisch versturen naar jezelf is gevraagd (één toestemmingskaart). */
+  autoSendSchedules?: { id: string; title: string; days: number[]; time_of_day: string; timezone: string }[];
+  /** Staande toestemming van het schema van deze taak (door de worker uit de database gehaald). */
+  standing?: { scheduleId: string; to: string } | null;
   /** Cache van de dot-handle (Caura agent_id). */
   agentId?: string;
   /** Voor tests: vervang de mail-afhankelijkheden. */
@@ -101,6 +105,12 @@ const createSchedule = tool(
     },
     time: { type: "string", description: "HH:MM, 24-uurs" },
     timezone: { type: "string", description: "IANA-tijdzone, standaard Europe/Amsterdam" },
+    auto_send_to_self: {
+      type: "boolean",
+      description:
+        "Alleen true als de gebruiker expliciet vraagt dat het resultaat elke keer AUTOMATISCH (zonder per keer goedkeuren) " +
+        "naar ZIJN EIGEN mailadres gaat. Hij krijgt dan eenmalig een toestemmingskaart. Mails aan anderen blijven altijd een kaart.",
+    },
   },
   ["title", "prompt", "days", "time"],
 );
@@ -433,11 +443,28 @@ async function run(ctx: ToolContext, name: string, a: Record<string, any>): Prom
         next_run_at: next,
       }).select("id").single();
       if (error) throw new Error(error.message);
+
+      let autoSend: string | undefined;
+      if (a.auto_send_to_self === true) {
+        if (ctx.origin !== "chat") {
+          autoSend = "Automatisch versturen kan alleen vanuit de chat worden aangevraagd.";
+        } else if (ctx.gmail.status !== "active" || !ctx.gmail.email) {
+          autoSend = "Automatisch versturen kan pas als Gmail verbonden is; het schema is wel aangemaakt.";
+        } else {
+          ctx.autoSendSchedules = [...(ctx.autoSendSchedules ?? []), {
+            id: data.id, title: str(a.title, 200) || "Check-in", days, time_of_day: time, timezone,
+          }];
+          autoSend =
+            `De gebruiker krijgt na dit antwoord EENMALIG een toestemmingskaart om voortaan automatisch naar ${ctx.gmail.email} te mailen. ` +
+            "Zeg dat; tot hij op Toestaan klikt, krijgt hij per keer een goedkeuringskaart.";
+        }
+      }
       return {
         ok: true,
         schedule_id: data.id,
         summary: `${describeDays(days)} om ${time} (${timezone})`,
         next_run_local: formatInZone(next, timezone),
+        ...(autoSend ? { auto_send: autoSend } : {}),
       };
     }
 
@@ -471,6 +498,7 @@ async function run(ctx: ToolContext, name: string, a: Record<string, any>): Prom
         taskId: ctx.taskId,
         canCompose: ctx.gmail.canCompose,
         createdActionIds: ctx.createdActionIds,
+        standing: ctx.standing ?? null,
       }, a);
 
     case "gmail_send":

@@ -48,6 +48,13 @@ export function defaultExecDeps(db: SupabaseClient = createAdminClient()): ExecD
     send: (token, payload, files) => sendGmail(token, { ...payload, gmailDraftId: payload.gmail_draft_id ?? null }, files),
     loadAttachment: (userId, documentId) => loadAttachment(userId, documentId, db),
     createEvent: (token, payload) => createCalendarEvent(token, payload),
+    grantAutoSend: async (userId, payload) => {
+      const { data } = await db.from("dot_schedules")
+        .update({ auto_send: true, auto_send_to: payload.to, auto_send_granted_at: new Date().toISOString() })
+        .eq("user_id", userId).in("id", payload.schedules.map((s) => s.id))
+        .select("id");
+      return data?.length ?? 0;
+    },
     audit: (entry) => logAudit(db, { ...entry, actor: "system" }),
   };
 }

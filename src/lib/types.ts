@@ -26,6 +26,7 @@ type ActionBase = {
   created_at: string;
   decided_at: string | null;
   executed_at: string | null;
+  approved_by?: string | null;
 };
 
 export type ActionRow =
@@ -50,6 +51,10 @@ export type ActionRow =
         description?: string | null;
         attendees?: string[];
       };
+    })
+  | (ActionBase & {
+      type: "schedule_auto_send";
+      payload: { to: string; schedules: { id: string; title: string; days: number[]; time_of_day: string; timezone: string }[] };
     });
 
 export type ConnectorRow = {
@@ -138,6 +143,10 @@ export type Schedule = {
   next_run_at: string | null;
   last_run_at: string | null;
   created_at: string;
+  /** Staande toestemming: automatisch mailen naar auto_send_to (eigen adres) zonder per-keer-goedkeuring. */
+  auto_send?: boolean;
+  auto_send_to?: string | null;
+  auto_send_granted_at?: string | null;
 };
 
 export type AuditEntry = {

@@ -4,6 +4,8 @@ import { ACTIVITY_TOOLS, chatTools, executeTool, parseArgs, type ToolContext } f
 import { chatSystemPrompt, loadAgentContext } from "./prompts";
 import type { Message, Step } from "@/lib/types";
 import { readDocument } from "@/lib/documents/store";
+import { createAction } from "@/lib/actions";
+import { supabaseActionStore } from "@/lib/actions-store";
 import { wrapUntrusted } from "@/lib/web";
 
 export type ChatEvent =
@@ -200,6 +202,18 @@ export async function runChat(opts: {
 
   // Gaf de laatste ronde geen tekst, dan blijft de tussentekst het antwoord.
   const text = roundText.trim() || interimText.trim();
+
+  // Gevraagd om automatisch naar jezelf te mailen: één toestemmingskaart voor alle schema's van deze beurt.
+  if (toolCtx.autoSendSchedules?.length && ctx.gmail.email) {
+    const consent = await createAction(supabaseActionStore(db), {
+      userId,
+      taskId: null,
+      type: "schedule_auto_send",
+      payload: { to: ctx.gmail.email, schedules: toolCtx.autoSendSchedules },
+    });
+    if (consent.ok) toolCtx.createdActionIds.push(consent.action.id);
+    else console.warn("[chat] toestemmingskaart maken mislukt:", consent.error);
+  }
   await activity.finish({ text, actionIds: toolCtx.createdActionIds });
 
   const meta: Message["meta"] = toolCtx.createdActionIds.length

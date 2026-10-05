@@ -34,8 +34,67 @@ function formatRange(startIso: string, endIso: string) {
 
 const input = "w-full rounded bg-panel border border-line px-2 py-1 outline-none focus:border-accent";
 
-/** Goedkeuringskaart. Alleen een klik hier kan een mail laten versturen of een afspraak laten inplannen. */
+type ConsentRow = Extract<ActionRow, { type: "schedule_auto_send" }>;
+type ProposalRow = Exclude<ActionRow, { type: "schedule_auto_send" }>;
+
+const DAY = ["ma", "di", "wo", "do", "vr", "za", "zo"];
+const days = (d: number[]) => (d.join(",") === "1,2,3,4,5" ? "werkdagen" : d.length === 7 ? "elke dag" : d.map((x) => DAY[x - 1]).join(", "));
+
+/** Goedkeuringskaart. Alleen een klik hier kan iets met extern effect laten gebeuren. */
 export function ApprovalCard({ action }: { action: ActionRow }) {
+  return action.type === "schedule_auto_send" ? <ConsentCard action={action} /> : <ProposalCard action={action} />;
+}
+
+/** Eenmalige toestemming om vanuit schema's automatisch naar jezelf te mailen. */
+function ConsentCard({ action }: { action: ConsentRow }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const pending = action.status === "pending";
+
+  async function call(kind: "approve" | "reject") {
+    setBusy(true);
+    setError(null);
+    const res = await fetch(`/api/actions/${action.id}/${kind}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const json = await res.json().catch(() => null);
+    if (!res.ok || json?.ok === false) setError(json?.error ?? "Dat lukte niet.");
+    setBusy(false);
+  }
+
+  return (
+    <div className={`rounded-xl border p-3 text-sm ${pending ? "border-warn/50 bg-warn/5" : "border-line bg-panel-2"}`}>
+      <div className="flex items-center gap-2 mb-2">
+        <span className="font-medium">🔁 Automatisch mailen naar jezelf</span>
+        <span className={`text-[11px] px-2 py-0.5 rounded-full ${action.status === "executed" ? "bg-ok/15 text-ok" : STATUS[action.status].cls}`}>
+          {action.status === "executed" ? "toegestaan" : STATUS[action.status].label}
+        </span>
+      </div>
+      <p>
+        Mag je dot op deze momenten <strong>zonder per keer te vragen</strong> een mail sturen naar <strong>{action.payload.to}</strong>?
+      </p>
+      <ul className="mt-1.5 space-y-0.5">
+        {action.payload.schedules.map((s) => (
+          <li key={s.id}>• {s.title}: {days(s.days)} om {s.time_of_day}</li>
+        ))}
+      </ul>
+      <p className="text-xs text-muted mt-2">
+        Alleen naar dit eigen adres. Mails aan anderen krijgen altijd een goedkeuringskaart. Intrekken kan altijd onder Gepland.
+      </p>
+      {error && <p className="text-bad text-xs mt-2">{error}</p>}
+      {pending && (
+        <div className="flex gap-2 mt-3">
+          <button onClick={() => call("approve")} disabled={busy} className="rounded-lg bg-accent text-white px-4 py-1.5 font-medium hover:brightness-110 disabled:opacity-50">
+            Toestaan
+          </button>
+          <button onClick={() => call("reject")} disabled={busy} className="rounded-lg border border-line px-4 py-1.5 hover:bg-panel disabled:opacity-50">
+            Afwijzen
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProposalCard({ action }: { action: ProposalRow }) {
   const isMail = action.type === "gmail_send";
   const [fields, setFields] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState(false);

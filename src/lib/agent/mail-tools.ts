@@ -3,7 +3,7 @@
 // executePendingAction(), en dat vereist een klik van de gebruiker.
 
 import { DateTime } from "luxon";
-import { createAction, createEmailAction, executePendingAction, type ActionStore, type ExecDeps } from "@/lib/actions";
+import { approveByStandingPermission, createAction, createEmailAction, executePendingAction, type ActionStore, type ExecDeps } from "@/lib/actions";
 import { wrapUntrusted } from "@/lib/web";
 
 export type MailToolDeps = {
@@ -24,6 +24,11 @@ export type MailToolCtx = {
   canCompose: boolean;
   /** Hierin komen de ids van nieuwe pending actions (voor de goedkeuringskaart). */
   createdActionIds: string[];
+  /**
+   * Staande toestemming van het schema waaruit deze taak komt: mails UITSLUITEND aan `to` mogen zonder klik.
+   * Wordt door de worker uit de database gehaald (schema.auto_send), nooit door het model gezet.
+   */
+  standing?: { scheduleId: string; to: string } | null;
 };
 
 const APPROVAL_NOTE =
@@ -61,6 +66,23 @@ export async function gmailCreateDraft(deps: MailToolDeps, ctx: MailToolCtx, arg
     } catch (e) {
       console.warn("[mail] Gmail-concept aanmaken mislukt:", e instanceof Error ? e.message : e);
     }
+  }
+
+  // Staande toestemming: alleen als ALLE ontvangers het toegestane eigen adres zijn.
+  if (ctx.standing && (await approveByStandingPermission(deps.store, ctx.userId, res.action.id, ctx.standing.to))) {
+    const sent = await executePendingAction(deps.exec, ctx.userId, res.action.id);
+    if (sent.ok) {
+      return {
+        ok: true,
+        sent: true,
+        auto: true,
+        to: res.action.payload.to,
+        note: "Verstuurd zonder klik op basis van de staande toestemming die de gebruiker voor dit schema gaf (alleen naar zijn eigen adres).",
+      };
+    }
+    // Versturen mislukte (bv. daglimiet): de kaart toont "Opnieuw proberen".
+    ctx.createdActionIds.push(res.action.id);
+    return { ok: false, sent: false, pending_action_id: res.action.id, code: sent.code, message: sent.message };
   }
 
   ctx.createdActionIds.push(res.action.id);

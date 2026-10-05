@@ -15,7 +15,7 @@ export async function continueAfterDecision(db: SupabaseClient, action: PendingA
   if (!task || task.status !== "needs_input") return false;
 
   const what = describeAction(action);
-  const verb = action.type === "gmail_send" ? "verstuurd" : "ingepland";
+  const verb = action.type === "gmail_send" ? "verstuurd" : action.type === "calendar_create_event" ? "ingepland" : "toegestaan";
   const steps: Step[] = [...(task.steps ?? [])];
   const now = new Date().toISOString();
 

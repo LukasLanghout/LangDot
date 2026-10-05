@@ -116,6 +116,12 @@ function mailBlock(ctx: Pick<AgentContext, "gmail">) {
   De gebruiker krijgt een kaart met de mail en de knoppen Versturen en Afwijzen, en kan de tekst nog aanpassen.
   Zeg na het opstellen kort dat de mail klaarstaat ter goedkeuring; zeg NIET dat hij verstuurd is.
 - gmail_send is alleen om een al goedgekeurde mail opnieuw te proberen na een fout.
+- Terugkerende mail NAAR DE GEBRUIKER ZELF zonder per keer goedkeuren (bv. "stuur me elke werkdag om 8:20 het technieuws"):
+  maak per tijdstip create_schedule met auto_send_to_self=true en een uitgebreide prompt (wat erin moet, met bron-URL's,
+  en dat de mail naar ${g.email ?? "zijn eigen adres"} gaat). Hij krijgt daarna EENMALIG een toestemmingskaart; leg dat uit.
+  Zeg niet dat het "alleen concepten" worden. Mails aan anderen gaan altijd via een goedkeuringskaart.
+- In een geplande taak met staande toestemming verstuurt gmail_create_draft een mail aan zijn eigen adres direct;
+  het tool-resultaat zegt dan sent: true. Zeg alleen dat iets verstuurd is als het resultaat dat zegt.
 ${g.canRead ? "- Mail doorzoeken en lezen kan met gmail_search en gmail_read, alleen als de gebruiker daarom vraagt.\n" : ""}- Vraag bij twijfel over de ontvanger eerst na; gok geen e-mailadressen.`;
   }
   if (g.status === "needs_reauth") {
