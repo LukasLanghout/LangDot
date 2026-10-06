@@ -5,6 +5,7 @@ import { getAccessToken, getConnector } from "@/lib/connectors/store";
 import { CALENDAR_SCOPES, GMAIL_SCOPES } from "@/lib/connectors/google";
 import { listCalendarEvents } from "@/lib/connectors/calendar";
 import { ConnectorError } from "@/lib/connectors/errors";
+import { budgetDay, dailyTokenBudget } from "@/lib/budget";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,6 +29,20 @@ export async function GET() {
   add({ name: "Encryptiesleutel", ok: keyOk, detail: keyOk ? "geldig (32 bytes)" : "ontbreekt of ongeldig", fix: "Zet CONNECTOR_ENCRYPTION_KEY (32 bytes, base64)." });
   add({ name: "Push-sleutels", ok: !!(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY), detail: process.env.VAPID_PUBLIC_KEY ? "gezet" : "ontbreekt", fix: "Zet VAPID_PUBLIC_KEY en VAPID_PRIVATE_KEY in Vercel." });
   add({ name: "Zoeken (Tavily)", ok: process.env.TAVILY_API_KEY ? true : null, detail: process.env.TAVILY_API_KEY ? "gezet" : "niet gezet (valt terug op DuckDuckGo)" });
+
+  // ── Tokenbudget van vandaag ──
+  {
+    const { data } = await db.from("dot_usage").select("total_tokens, requests").eq("user_id", user.id).eq("day", budgetDay()).maybeSingle();
+    const used = Number(data?.total_tokens ?? 0);
+    const budget = dailyTokenBudget();
+    const pct = Math.round((used / budget) * 100);
+    add({
+      name: "Tokenbudget vandaag",
+      ok: used < budget * 0.9 ? true : used < budget ? null : false,
+      detail: `${used.toLocaleString("nl-NL")} van ${budget.toLocaleString("nl-NL")} (${pct}%), ${data?.requests ?? 0} aanroepen`,
+      fix: "Zet DAILY_TOKEN_BUDGET hoger in Vercel (en redeploy); wachtende taken gaan dan binnen 15 minuten vanzelf verder.",
+    });
+  }
 
   // ── Migraties ──
   const tables: [string, string][] = [

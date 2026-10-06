@@ -1,5 +1,4 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { DateTime } from "luxon";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { complete, type ChatMessage, type CompleteOptions } from "@/lib/llm";
 import { LlmError, userSafeMessage } from "@/lib/llm-errors";
@@ -63,9 +62,9 @@ export async function runWorker(opts: { userId?: string; deadline?: number } = {
       stats.errors++;
       if (e instanceof LlmError && (e.kind === "rate_limit" || e.kind === "unavailable" || e.kind === "budget")) {
         // Geen fout van de taak zelf: wachten zonder poging te verbruiken.
-        const until = e.kind === "budget"
-          ? DateTime.now().setZone("Europe/Amsterdam").plus({ days: 1 }).startOf("day").toJSDate()
-          : new Date(Date.now() + 5 * 60_000);
+        // Budget: elke 15 minuten opnieuw kijken (kost geen tokens). Verhoogt de gebruiker het budget, dan gaat de
+        // taak vanzelf verder; anders start het nieuwe budget na middernacht.
+        const until = new Date(Date.now() + (e.kind === "budget" ? 15 : 5) * 60_000);
         await db.from("dot_tasks").update({ locked_until: until.toISOString(), error: e.message })
           .eq("id", task.id).eq("status", "running");
         await logAudit(db, { userId: task.user_id, actor: "system", action: `waiting_${e.kind}`, taskId: task.id, output: e.message });
