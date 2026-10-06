@@ -46,6 +46,8 @@ export type CompleteOptions = {
   userId?: string | null;
   /** Harde limiet voor deze ene aanroep (bv. de tijd die een serverless-aanroep nog heeft). */
   timeoutMs?: number;
+  /** Afbreken (bv. de gebruiker drukt op Stop). Een afgebroken aanroep wordt nooit opnieuw geprobeerd. */
+  signal?: AbortSignal;
   /** Niet opnieuw proberen binnen deze aanroep; de aanroeper regelt dat (bv. de volgende worker-tick). */
   noRetry?: boolean;
 };
@@ -284,6 +286,11 @@ function toLlmError(e: unknown): LlmError {
 
 // ───────────────────────────── Aanroepen ─────────────────────────────
 
+function reqOptions(opts: CompleteOptions) {
+  if (!opts.timeoutMs && !opts.signal) return undefined;
+  return { ...(opts.timeoutMs ? { timeout: opts.timeoutMs } : {}), ...(opts.signal ? { signal: opts.signal } : {}) };
+}
+
 function params(model: string, opts: CompleteOptions) {
   const p: Record<string, unknown> = {
     model,
@@ -343,7 +350,7 @@ function toUsage(raw: any, opts: CompleteOptions, output: string): Usage {
 }
 
 async function once(model: string, opts: CompleteOptions): Promise<CompleteResult> {
-  const res: any = await getClient().chat.completions.create(params(model, opts) as any, opts.timeoutMs ? { timeout: opts.timeoutMs } : undefined);
+  const res: any = await getClient().chat.completions.create(params(model, opts) as any, reqOptions(opts));
   assertModel(model, res?.model);
   const msg = res?.choices?.[0]?.message ?? {};
   const content = stripThink(typeof msg.content === "string" ? msg.content : "");
@@ -362,7 +369,7 @@ async function streamOnce(model: string, opts: CompleteOptions, state: { emitted
     ...params(model, opts),
     stream: true,
     stream_options: { include_usage: true },
-  } as any, opts.timeoutMs ? { timeout: opts.timeoutMs } : undefined);
+  } as any, reqOptions(opts));
 
   const filter = new ThinkFilter();
   const calls: any[] = [];
@@ -425,7 +432,7 @@ export async function complete(opts: CompleteOptions): Promise<CompleteResult> {
     try {
       const result = await withRetry(
         () => (opts.onText ? streamOnce(model, opts, state) : once(model, opts)),
-        () => !state.emitted && !opts.noRetry, // nooit opnieuw als de gebruiker al tekst zag, of als de aanroeper dat regelt
+        () => !state.emitted && !opts.noRetry && !opts.signal?.aborted, // nooit opnieuw als de gebruiker tekst zag, stopte, of de aanroeper dat regelt
       );
       if (opts.userId) {
         await recordUsage(opts.userId, result.usage).catch((e) => console.error("[llm] usage opslaan mislukt:", describe(e)));

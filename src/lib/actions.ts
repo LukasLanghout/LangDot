@@ -11,7 +11,7 @@ import { ConnectorError } from "@/lib/connectors/errors";
 import { normalizeMailBody } from "@/lib/mail-format";
 
 export type ActionStatus = "pending" | "approved" | "rejected" | "executed" | "expired";
-export type ActionType = "gmail_send" | "calendar_create_event" | "schedule_auto_send";
+export type ActionType = "gmail_send" | "calendar_create_event" | "schedule_auto_send" | "schedule_delete";
 
 /** Bijlage = een document van de gebruiker (alleen metadata; de inhoud wordt pas bij versturen geladen). */
 export type Attachment = { document_id: string; name: string; mime: string; size: number };
@@ -43,6 +43,9 @@ export type EventPayload = {
  * Eenmalige toestemming: vanuit deze schema's mag de dot voortaan zonder per-keer-goedkeuring mailen,
  * maar UITSLUITEND naar `to` (het eigen, via OAuth geverifieerde Gmail-adres van de gebruiker).
  */
+/** Verwijderen van een schema: pas na de klik van de gebruiker. */
+export type DeleteSchedulePayload = { schedule_id: string; title: string; when: string };
+
 export type AutoSendPayload = {
   to: string;
   schedules: { id: string; title: string; days: number[]; time_of_day: string; timezone: string }[];
@@ -65,9 +68,10 @@ type Base = {
 export type PendingAction =
   | (Base & { type: "gmail_send"; payload: EmailPayload })
   | (Base & { type: "calendar_create_event"; payload: EventPayload })
-  | (Base & { type: "schedule_auto_send"; payload: AutoSendPayload });
+  | (Base & { type: "schedule_auto_send"; payload: AutoSendPayload })
+  | (Base & { type: "schedule_delete"; payload: DeleteSchedulePayload });
 
-type AnyPayload = EmailPayload | EventPayload | AutoSendPayload;
+type AnyPayload = EmailPayload | EventPayload | AutoSendPayload | DeleteSchedulePayload;
 type Patch = Partial<Omit<Base, "id" | "user_id">> & { payload?: AnyPayload };
 
 export interface ActionStore {
@@ -201,9 +205,19 @@ export function validateAutoSendPayload(input: { to?: unknown; schedules?: unkno
   return { ok: true, payload: { to, schedules } };
 }
 
+export function validateDeleteSchedulePayload(input: { schedule_id?: unknown; title?: unknown; when?: unknown }): Validation<DeleteSchedulePayload> {
+  const id = typeof input.schedule_id === "string" ? input.schedule_id : "";
+  if (!UUID_RE.test(id)) return { ok: false, error: "Ongeldig schema-id." };
+  return {
+    ok: true,
+    payload: { schedule_id: id, title: String(input.title ?? "Schema").slice(0, 200), when: String(input.when ?? "").slice(0, 120) },
+  };
+}
+
 export function validatePayload(type: ActionType, input: Record<string, unknown>): Validation<AnyPayload> {
   if (type === "gmail_send") return validateEmailPayload(input);
   if (type === "calendar_create_event") return validateEventPayload(input);
+  if (type === "schedule_delete") return validateDeleteSchedulePayload(input);
   return validateAutoSendPayload(input);
 }
 
@@ -212,6 +226,7 @@ const EDITABLE: Record<ActionType, string[]> = {
   gmail_send: ["to", "subject", "body"],
   calendar_create_event: ["summary", "start", "end", "location", "description", "attendees"],
   schedule_auto_send: [],
+  schedule_delete: [],
 };
 
 // ───────────────────────────── Levenscyclus ─────────────────────────────
@@ -290,6 +305,10 @@ export type ExecDeps = {
   createEvent?: (token: string, payload: EventPayload) => Promise<string>;
   /** Zet auto_send aan op de schema's in de payload (alleen eigen schema's). Geeft het aantal terug. */
   grantAutoSend?: (userId: string, payload: AutoSendPayload) => Promise<number>;
+  /** Onthoudt de links uit een verstuurde mail (nieuwsbrief-ontdubbeling). Best effort. */
+  recordLinks?: (userId: string, body: string) => Promise<void>;
+  /** Verwijdert een schema van de gebruiker. Geeft het aantal verwijderde schemas terug. */
+  deleteSchedule?: (userId: string, scheduleId: string) => Promise<number>;
   audit?: (entry: { userId: string; action: string; taskId: string | null; input: unknown; output?: unknown }) => Promise<void>;
   now?: () => Date;
 };
@@ -302,7 +321,8 @@ export function startOfDay(now: Date) {
 export type ActionLike =
   | { type: "gmail_send"; payload: EmailPayload }
   | { type: "calendar_create_event"; payload: EventPayload }
-  | { type: "schedule_auto_send"; payload: AutoSendPayload };
+  | { type: "schedule_auto_send"; payload: AutoSendPayload }
+  | { type: "schedule_delete"; payload: DeleteSchedulePayload };
 
 /** Korte, veilige omschrijving voor audit-log en taakresultaat (geen mailtekst). */
 export function describeAction(a: ActionLike) {
@@ -310,6 +330,7 @@ export function describeAction(a: ActionLike) {
     const n = a.payload.attachments?.length ?? 0;
     return `mail aan ${a.payload.to.join(", ")}, onderwerp "${a.payload.subject}"${n ? ` (${n} bijlage${n === 1 ? "" : "n"})` : ""}`;
   }
+  if (a.type === "schedule_delete") return `schema "${a.payload.title}" verwijderen (${a.payload.when})`;
   if (a.type === "schedule_auto_send") {
     const times = a.payload.schedules.map((s) => s.time_of_day).join(" en ");
     return `toestemming om om ${times} automatisch te mailen naar ${a.payload.to}`;
@@ -325,7 +346,7 @@ export async function executePendingAction(deps: ExecDeps, userId: string, actio
   const now = deps.now?.() ?? new Date();
   const action = await deps.store.get(actionId, userId);
   if (!action) return fail("not_found", "Deze actie bestaat niet of hoort niet bij jou.");
-  const noun = action.type === "gmail_send" ? "mail" : action.type === "calendar_create_event" ? "afspraak" : "toestemming";
+  const noun = action.type === "gmail_send" ? "mail" : action.type === "calendar_create_event" ? "afspraak" : action.type === "schedule_delete" ? "verwijdering" : "toestemming";
   if (action.status === "executed") return fail("already_executed", `Deze ${noun} is al uitgevoerd.`);
   if (action.status !== "approved") {
     return fail("not_approved", `Deze ${noun} is niet goedgekeurd. Alleen de gebruiker kan goedkeuren via de knop op de kaart.`);
@@ -354,6 +375,12 @@ export async function executePendingAction(deps: ExecDeps, userId: string, actio
       if (files.reduce((s, f) => s + f.data.length, 0) > MAX_ATTACHMENT_BYTES) throw new Error("Bijlagen zijn te groot");
       const token = await deps.getAccessToken(userId, "gmail");
       externalId = await deps.send(token, mail, files);
+      await deps.recordLinks?.(userId, mail.body).catch(() => undefined);
+    } else if (action.type === "schedule_delete") {
+      if (!deps.deleteSchedule) throw new ConnectorError("config", "geen deleteSchedule");
+      const n = await deps.deleteSchedule(userId, (v.payload as DeleteSchedulePayload).schedule_id);
+      if (!n) throw new Error("Schema niet gevonden");
+      externalId = "verwijderd";
     } else if (action.type === "schedule_auto_send") {
       if (!deps.grantAutoSend) throw new ConnectorError("config", "geen grantAutoSend");
       const n = await deps.grantAutoSend(userId, v.payload as AutoSendPayload);
@@ -364,11 +391,11 @@ export async function executePendingAction(deps: ExecDeps, userId: string, actio
       const token = await deps.getAccessToken(userId, "google_calendar");
       externalId = await deps.createEvent(token, v.payload as EventPayload);
     }
-    const result = action.type === "gmail_send" ? { gmail_message_id: externalId } : action.type === "calendar_create_event" ? { calendar_event_id: externalId } : { granted: externalId };
+    const result = action.type === "gmail_send" ? { gmail_message_id: externalId } : action.type === "calendar_create_event" ? { calendar_event_id: externalId } : action.type === "schedule_delete" ? { deleted: true } : { granted: externalId };
     await deps.store.update(actionId, userId, { result });
     await deps.audit?.({
       userId,
-      action: action.type === "gmail_send" ? "email_sent" : action.type === "calendar_create_event" ? "calendar_event_created" : "auto_send_granted",
+      action: action.type === "gmail_send" ? "email_sent" : action.type === "calendar_create_event" ? "calendar_event_created" : action.type === "schedule_delete" ? "schedule_deleted" : "auto_send_granted",
       taskId: action.task_id,
       input: action.type === "gmail_send"
         ? {
@@ -378,7 +405,9 @@ export async function executePendingAction(deps: ExecDeps, userId: string, actio
           }
         : action.type === "calendar_create_event"
           ? { summary: (v.payload as EventPayload).summary, start: (v.payload as EventPayload).start, attendees: (v.payload as EventPayload).attendees, created_at: now.toISOString() }
-          : { to: (v.payload as AutoSendPayload).to, schedules: (v.payload as AutoSendPayload).schedules.map((s) => `${s.title} ${s.time_of_day}`), granted_at: now.toISOString() },
+          : action.type === "schedule_delete"
+            ? { schedule: (v.payload as DeleteSchedulePayload).title, when: (v.payload as DeleteSchedulePayload).when, deleted_at: now.toISOString() }
+            : { to: (v.payload as AutoSendPayload).to, schedules: (v.payload as AutoSendPayload).schedules.map((s) => `${s.title} ${s.time_of_day}`), granted_at: now.toISOString() },
     });
     return { ok: true, action: { ...claimed, result } as PendingAction, externalId };
   } catch (e) {

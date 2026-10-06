@@ -55,7 +55,8 @@ export type ActionRow =
   | (ActionBase & {
       type: "schedule_auto_send";
       payload: { to: string; schedules: { id: string; title: string; days: number[]; time_of_day: string; timezone: string }[] };
-    });
+    })
+  | (ActionBase & { type: "schedule_delete"; payload: { schedule_id: string; title: string; when: string } });
 
 export type ConnectorRow = {
   id: string;

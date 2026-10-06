@@ -60,7 +60,7 @@ export async function POST(req: Request) {
       send({ t: "user", id: saved.id });
       let createdTask = false;
       try {
-        const result = await runChat({ db, userId: user.id, userMessageId: saved.id, userText: message, documentIds: docs.map((d) => d.id), send });
+        const result = await runChat({ db, userId: user.id, userMessageId: saved.id, userText: message, documentIds: docs.map((d) => d.id), signal: req.signal, send });
         createdTask = result.createdTask;
         const text = result.text.trim() || "…";
         const { data: reply } = await db
@@ -70,6 +70,11 @@ export async function POST(req: Request) {
           .single();
         send({ t: "done", id: reply?.id ?? null, text, meta: result.meta });
       } catch (e) {
+        if (req.signal.aborted) {
+          // De gebruiker drukte op Stop: geen fout, wel een nette afsluiting zodat vraag en antwoord gepaard blijven.
+          await db.from("dot_messages").insert({ user_id: user.id, role: "assistant", content: "Gestopt op jouw verzoek.", reply_to: saved.id, meta: {} });
+          return;
+        }
         // Details alleen in de serverlog; de gebruiker krijgt een nette melding zonder API-fouten of modelnamen.
         console.error("[chat] mislukt:", e instanceof LlmError ? `${e.kind}: ${e.detail}` : e);
         const safe = userSafeMessage(e);

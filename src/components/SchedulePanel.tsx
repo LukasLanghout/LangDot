@@ -4,6 +4,30 @@ import { useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { Schedule } from "@/lib/types";
 import { DAY_LABELS, computeNextRun, describeDays, formatInZone } from "@/lib/schedule";
+import { btn, chip, field, Switch, textBtn } from "./ui";
+import { Icon } from "./Icon";
+
+function DayPicker({ days, onChange }: { days: number[]; onChange: (d: number[]) => void }) {
+  return (
+    <div className="flex gap-1.5 flex-wrap" role="group" aria-label="Dagen">
+      {DAY_LABELS.map((label, i) => {
+        const d = i + 1;
+        const on = days.includes(d);
+        return (
+          <button
+            key={d}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onChange(on ? days.filter((x) => x !== d) : [...days, d])}
+            className={`${chip(on)} !px-0 w-11 sm:w-10 justify-center`}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 function ScheduleRow({ s, onUpdate, onDelete }: {
   s: Schedule;
@@ -15,66 +39,52 @@ function ScheduleRow({ s, onUpdate, onDelete }: {
   const [days, setDays] = useState<number[]>(s.days);
 
   return (
-    <li className={`rounded-lg border border-line bg-panel-2 p-3 ${s.active ? "" : "opacity-60"}`}>
-      <div className="flex items-start gap-2">
+    <li className={`rounded-2xl border border-line bg-panel p-3.5 ${s.active ? "" : "opacity-70"}`}>
+      <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
-          <div className="font-medium text-sm">{s.title}</div>
-          <div className="text-xs text-muted mt-0.5">
+          <div className="font-medium text-[15px]">{s.title}</div>
+          <div className="text-[13px] text-faint mt-0.5">
             {describeDays(s.days)} om {s.time_of_day} · {s.timezone}
           </div>
-          <div className="text-xs text-muted">
+          <div className="text-[13px] text-faint">
             Volgende: {s.active ? formatInZone(s.next_run_at, s.timezone) : "uitgeschakeld"}
           </div>
         </div>
-        <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none">
-          <input type="checkbox" checked={s.active} onChange={() => onUpdate(s, { active: !s.active })} className="accent-[var(--color-accent)]" />
-          aan
-        </label>
+        <Switch checked={s.active} onChange={(v) => onUpdate(s, { active: v })} label={`${s.title} ${s.active ? "uitzetten" : "aanzetten"}`} />
       </div>
-      <div className="text-[13px] mt-2 text-muted line-clamp-3">“{s.prompt}”</div>
+      <div className="text-[14px] mt-2 text-muted line-clamp-3">&ldquo;{s.prompt}&rdquo;</div>
       {s.auto_send && (
-        <div className="mt-2 flex items-center gap-2 text-xs rounded-lg border border-accent/40 bg-accent/10 px-2 py-1">
-          <span>🔁 Mailt automatisch naar {s.auto_send_to}</span>
+        <div className="mt-2.5 flex items-center gap-2 text-[13px] rounded-xl border border-line bg-panel-2 px-3 py-2">
+          <Icon name="repeat" size={14} className="shrink-0 text-faint" />
+          <span className="min-w-0">Mailt automatisch naar {s.auto_send_to}</span>
           <button
             onClick={() => confirm("Toestemming intrekken? Daarna krijg je per mail weer een goedkeuringskaart.") && onUpdate(s, { auto_send: false })}
-            className="ml-auto text-muted hover:text-bad"
+            className={`${textBtn} ml-auto shrink-0 hover:!text-bad`}
           >
-            intrekken
+            Intrekken
           </button>
         </div>
       )}
 
       {editing ? (
-        <div className="mt-3 space-y-2">
-          <div className="flex gap-1 flex-wrap">
-            {DAY_LABELS.map((label, i) => {
-              const d = i + 1;
-              const on = days.includes(d);
-              return (
-                <button key={d} type="button" onClick={() => setDays(on ? days.filter((x) => x !== d) : [...days, d])}
-                  className={`w-8 h-7 text-xs rounded border ${on ? "border-accent bg-accent/20" : "border-line text-muted"}`}>
-                  {label}
-                </button>
-              );
-            })}
-          </div>
+        <div className="mt-3 space-y-2.5">
+          <DayPicker days={days} onChange={setDays} />
           <div className="flex gap-2 items-center">
-            <input type="time" value={time} onChange={(e) => setTime(e.target.value)}
-              className="bg-panel border border-line rounded px-2 py-1 text-sm" />
+            <input type="time" value={time} onChange={(e) => setTime(e.target.value)} aria-label="Tijd" className={`${field} !w-auto`} />
             <button
               disabled={!days.length}
               onClick={async () => { await onUpdate(s, { time_of_day: time, days: [...days].sort() }); setEditing(false); }}
-              className="rounded bg-accent text-white px-2.5 py-1 text-xs disabled:opacity-40"
+              className={btn.primary}
             >
               Opslaan
             </button>
-            <button onClick={() => setEditing(false)} className="text-xs text-muted hover:text-fg">Annuleren</button>
+            <button onClick={() => setEditing(false)} className={btn.ghost}>Annuleren</button>
           </div>
         </div>
       ) : (
-        <div className="mt-2 flex gap-3 justify-end text-xs text-muted">
-          <button onClick={() => setEditing(true)} className="hover:text-fg">wijzig tijd/dagen</button>
-          <button onClick={() => confirm(`Schema "${s.title}" verwijderen?`) && onDelete(s)} className="hover:text-bad">verwijder</button>
+        <div className="mt-2 flex gap-1 justify-end">
+          <button onClick={() => setEditing(true)} className={textBtn}>Wijzig tijd of dagen</button>
+          <button onClick={() => confirm(`Schema "${s.title}" verwijderen?`) && onDelete(s)} className={`${textBtn} hover:!text-bad`}>Verwijder</button>
         </div>
       )}
     </li>
@@ -100,16 +110,16 @@ export function SchedulePanel({ userId, schedules }: { userId: string; schedules
   }
 
   return (
-    <div className="space-y-3">
-      <p className="text-xs text-muted">
+    <div className="space-y-4">
+      <p className="text-[14px] text-muted">
         Terugkerende check-ins. Maak ze hieronder, of vraag het in de chat.
       </p>
       <NewSchedule />
-      {error && <p className="text-bad text-xs">{error}</p>}
+      {error && <p className="text-bad text-[13px]">{error}</p>}
       {schedules.length === 0 ? (
-        <p className="text-sm text-muted">Nog geen geplande check-ins.</p>
+        <p className="text-[15px] text-muted">Nog geen geplande check-ins.</p>
       ) : (
-        <ul className="space-y-2">
+        <ul className="space-y-2.5">
           {schedules.map((s) => <ScheduleRow key={s.id} s={s} onUpdate={update} onDelete={remove} />)}
         </ul>
       )}
@@ -117,27 +127,49 @@ export function SchedulePanel({ userId, schedules }: { userId: string; schedules
   );
 }
 
-
 const NEWS_PROMPT =
   "Zoek het laatste tech-nieuws van vandaag en gisteren (AI, tech en business): minimaal 8 items, zo uitgebreid mogelijk. " +
   "Per item: titel, datum, samenvatting van 2 tot 3 zinnen en de bron als link. Prioriteer grote aankondigingen, productlanceringen, " +
   "funding rounds, overnames en beleid. Noem alleen wat je in zoekresultaten vond.";
 
-/** Nieuw schema, los van het taalmodel. Het vinkje is de toestemming om automatisch naar jezelf te mailen. */
+const BRIEF_PROMPT =
+  "Maak een korte dagbrief: wat staat er vandaag in mijn agenda, welke ongelezen of belangrijke mails in mijn persoonlijke Gmail vragen aandacht, " +
+  "en welke openstaande taken heb ik. Noem alleen wat je in mijn agenda en mail vindt, en zeg erbij dat je mijn werkmail niet ziet.";
+
+const RECAP_PROMPT =
+  "Maak een korte avondrecap: wat is er vandaag gedaan op basis van mijn afgeronde taken en agenda, wat staat er morgen op de planning, " +
+  "en wat blijft liggen. Houd het kort en noem alleen wat je kunt terugvinden.";
+
+type Preset = { id: string; label: string; title: string; prompt: string; times: string; days: number[]; auto: boolean };
+const PRESETS: Preset[] = [
+  { id: "news", label: "Technieuws", title: "Technieuws", prompt: NEWS_PROMPT, times: "08:20, 12:30", days: [1, 2, 3, 4, 5], auto: true },
+  { id: "brief", label: "Dagbrief", title: "Dagbrief", prompt: BRIEF_PROMPT, times: "07:45", days: [1, 2, 3, 4, 5], auto: false },
+  { id: "recap", label: "Avondrecap", title: "Avondrecap", prompt: RECAP_PROMPT, times: "18:00", days: [1, 2, 3, 4, 5], auto: false },
+];
+
+/** Nieuw schema, los van het taalmodel. De schakelaar is de toestemming om automatisch naar jezelf te mailen. */
 function NewSchedule() {
   const [open, setOpen] = useState(false);
-  const [title, setTitle] = useState("Technieuws");
-  const [prompt, setPrompt] = useState(NEWS_PROMPT);
-  const [times, setTimes] = useState("08:20, 12:30");
-  const [days, setDays] = useState<number[]>([1, 2, 3, 4, 5]);
-  const [auto, setAuto] = useState(true);
+  const [title, setTitle] = useState(PRESETS[0].title);
+  const [prompt, setPrompt] = useState(PRESETS[0].prompt);
+  const [times, setTimes] = useState(PRESETS[0].times);
+  const [days, setDays] = useState<number[]>(PRESETS[0].days);
+  const [auto, setAuto] = useState(PRESETS[0].auto);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  function applyPreset(p: Preset) {
+    setTitle(p.title);
+    setPrompt(p.prompt);
+    setTimes(p.times);
+    setDays(p.days);
+    setAuto(p.auto);
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     const list = times.split(/[,\s]+/).map((t) => t.trim()).filter(Boolean);
-    if (!list.length) return setMsg({ ok: false, text: "Vul minstens één tijd in, bv. 08:20." });
+    if (!list.length) return setMsg({ ok: false, text: "Vul minstens één tijd in, bijvoorbeeld 08:20." });
     setBusy(true);
     setMsg(null);
     const created: string[] = [];
@@ -170,53 +202,50 @@ function NewSchedule() {
   if (!open) {
     return (
       <div>
-        <button onClick={() => { setOpen(true); setMsg(null); }} className="rounded-lg bg-accent text-white px-3 py-1.5 text-sm font-medium hover:brightness-110">
-          + Nieuw schema
+        <button onClick={() => { setOpen(true); setMsg(null); }} className={btn.primary}>
+          <Icon name="plus" size={16} />
+          Nieuw schema
         </button>
-        {msg && <p className={`text-xs mt-2 ${msg.ok ? "text-ok" : "text-bad"}`}>{msg.text}</p>}
+        {msg && <p className={`text-[13px] mt-2 ${msg.ok ? "text-ok" : "text-bad"}`}>{msg.text}</p>}
       </div>
     );
   }
 
   return (
-    <form onSubmit={submit} className="rounded-lg border border-line p-3 space-y-2.5">
-      <label className="block">
-        <span className="text-xs text-muted">Naam</span>
-        <input value={title} onChange={(e) => setTitle(e.target.value)} className="w-full rounded bg-panel-2 border border-line px-2 py-1.5 text-sm outline-none focus:border-accent" />
-      </label>
-      <label className="block">
-        <span className="text-xs text-muted">Wat moet de dot doen?</span>
-        <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={5} className="w-full rounded bg-panel-2 border border-line px-2 py-1.5 text-sm outline-none focus:border-accent" />
-      </label>
-      <label className="block">
-        <span className="text-xs text-muted">Tijden (Amsterdam), meerdere met komma</span>
-        <input value={times} onChange={(e) => setTimes(e.target.value)} placeholder="08:20, 12:30" className="w-full rounded bg-panel-2 border border-line px-2 py-1.5 text-sm outline-none focus:border-accent" />
-      </label>
-      <div className="flex gap-1 flex-wrap">
-        {DAY_LABELS.map((label, i) => {
-          const d = i + 1;
-          const on = days.includes(d);
-          return (
-            <button key={d} type="button" onClick={() => setDays(on ? days.filter((x) => x !== d) : [...days, d])}
-              className={`w-9 h-7 text-xs rounded border ${on ? "border-accent bg-accent/20" : "border-line text-muted"}`}>
-              {label}
-            </button>
-          );
-        })}
+    <form onSubmit={submit} className="rounded-2xl border border-line bg-panel p-3.5 space-y-3">
+      <div className="flex gap-1.5 flex-wrap" role="group" aria-label="Voorbeelden">
+        {PRESETS.map((p) => (
+          <button key={p.id} type="button" onClick={() => applyPreset(p)} className={chip(title === p.title)}>
+            {p.label}
+          </button>
+        ))}
       </div>
-      <label className="flex items-start gap-2 text-sm rounded-lg border border-accent/40 bg-accent/10 px-2.5 py-2">
-        <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} className="mt-0.5" />
-        <span>
-          Mail het resultaat <strong>automatisch naar mij</strong>, zonder per keer goedkeuren.
-          <span className="block text-xs text-muted">Alleen naar het adres van je verbonden Gmail. Intrekken kan hier altijd.</span>
-        </span>
+      <label className="block">
+        <span className="text-[13px] text-faint">Naam</span>
+        <input value={title} onChange={(e) => setTitle(e.target.value)} className={field} />
       </label>
-      {msg && <p className={`text-xs ${msg.ok ? "text-ok" : "text-bad"}`}>{msg.text}</p>}
+      <label className="block">
+        <span className="text-[13px] text-faint">Wat moet de dot doen?</span>
+        <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={5} className={field} />
+      </label>
+      <label className="block">
+        <span className="text-[13px] text-faint">Tijden (Amsterdam), meerdere met een komma</span>
+        <input value={times} onChange={(e) => setTimes(e.target.value)} placeholder="08:20, 12:30" className={field} />
+      </label>
+      <DayPicker days={days} onChange={setDays} />
+      <div className="flex items-start gap-3 rounded-xl border border-line bg-panel-2 px-3.5 py-3">
+        <Switch checked={auto} onChange={setAuto} label="Resultaat automatisch naar mezelf mailen" />
+        <div className="text-[14px]">
+          Mail het resultaat automatisch naar mij, zonder per keer goedkeuren.
+          <span className="block text-[13px] text-faint mt-0.5">Alleen naar het adres van je verbonden Gmail. Intrekken kan hier altijd.</span>
+        </div>
+      </div>
+      {msg && <p className={`text-[13px] ${msg.ok ? "text-ok" : "text-bad"}`}>{msg.text}</p>}
       <div className="flex gap-2">
-        <button disabled={busy || !title.trim() || !prompt.trim() || !days.length} className="rounded-lg bg-accent text-white px-3 py-1.5 text-sm font-medium disabled:opacity-40">
+        <button disabled={busy || !title.trim() || !prompt.trim() || !days.length} className={btn.primary}>
           {busy ? "Aanmaken…" : "Aanmaken"}
         </button>
-        <button type="button" onClick={() => setOpen(false)} className="text-sm text-muted hover:text-fg">Annuleren</button>
+        <button type="button" onClick={() => setOpen(false)} className={btn.ghost}>Annuleren</button>
       </div>
     </form>
   );

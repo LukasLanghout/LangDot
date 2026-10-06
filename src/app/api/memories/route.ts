@@ -2,6 +2,7 @@ import { getUser } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logAudit } from "@/lib/audit";
 import { cauraDelete, cauraUpdate, cauraWrite } from "@/lib/caura";
+import { labelMemory } from "@/lib/agent/memory-rules";
 
 export const runtime = "nodejs";
 
@@ -28,7 +29,10 @@ async function readBody(req: Request) {
 export async function POST(req: Request) {
   const s = await setup();
   if (!s) return Response.json({ error: "Niet ingelogd" }, { status: 401 });
-  const { content, kind } = await readBody(req);
+  const body = await readBody(req);
+  const kind = body.kind;
+  // Wat de gebruiker zelf in het paneel typt, is "gezegd", met datum.
+  const content = body.content ? labelMemory("gezegd", body.content, new Date()) : "";
   if (!content) return Response.json({ error: "Lege notitie" }, { status: 400 });
 
   const { data, error } = await s.db.from("dot_memories").insert({ user_id: s.user.id, kind, content }).select("id").single();
@@ -43,7 +47,9 @@ export async function POST(req: Request) {
 export async function PATCH(req: Request) {
   const s = await setup();
   if (!s) return Response.json({ error: "Niet ingelogd" }, { status: 401 });
-  const { content, kind, id } = await readBody(req);
+  const body = await readBody(req);
+  const { kind, id } = body;
+  const content = body.content ? labelMemory("gezegd", body.content, new Date()) : "";
   if (!id || !content) return Response.json({ error: "id en content zijn nodig" }, { status: 400 });
 
   const { data: before } = await s.db.from("dot_memories").select("content, caura_id").eq("id", id).eq("user_id", s.user.id).maybeSingle();

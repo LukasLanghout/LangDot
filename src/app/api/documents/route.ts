@@ -29,6 +29,8 @@ export async function POST(req: Request) {
         ocrText: typeof body?.ocr_text === "string" ? body.ocr_text : null,
       }, db);
     }
+    const duplicate = "duplicate" in doc && doc.duplicate === true;
+    if (duplicate) return Response.json({ ok: true, document: doc, duplicate: true });
     await logAudit(db, {
       userId: user.id, actor: "user", action: "document_added",
       input: { name: doc.name, mime: doc.mime, size: doc.size }, output: { status: doc.status, chars: doc.text_chars },

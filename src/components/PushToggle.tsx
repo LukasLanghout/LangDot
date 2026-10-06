@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Icon } from "./Icon";
+import { railItem, RailLabel } from "./RailItem";
 
 function base64UrlToBytes(b64: string) {
   const padded = (b64 + "=".repeat((4 - (b64.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/");
@@ -13,7 +15,7 @@ function base64UrlToBytes(b64: string) {
 type State = "loading" | "unsupported" | "ios-install" | "denied" | "off" | "on";
 
 /** Meldingen op dit apparaat aan/uit. Werkt in Chrome, Edge, Firefox; op iPhone pas na "Zet op beginscherm". */
-export function PushToggle() {
+export function PushToggle({ expanded = true }: { expanded?: boolean }) {
   const [state, setState] = useState<State>("loading");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -97,25 +99,36 @@ export function PushToggle() {
 
   if (state === "loading") return null;
 
+  const on = state === "on";
+  const label = on ? "Meldingen staan aan" : "Meldingen aanzetten";
+  const unavailable = state === "denied" || state === "ios-install" || state === "unsupported";
+  const note =
+    state === "denied" ? "Geblokkeerd in je browserinstellingen."
+    : state === "ios-install" ? "Op iPhone: Deel, dan Zet op beginscherm, en open LangDot daarvandaan."
+    : state === "unsupported" ? "Deze browser ondersteunt geen meldingen."
+    : null;
+
   return (
-    <div className="text-xs space-y-1.5 lg:w-full">
-      {state === "on" && (
-        <div className="flex gap-2 lg:flex-col">
-          <button onClick={disable} disabled={busy} className="rounded-lg px-3 py-1.5 text-sm border border-ok/40 bg-ok/10 text-ok disabled:opacity-50">
-            🔔 Meldingen aan
-          </button>
-          <button onClick={test} disabled={busy} className="text-muted hover:text-fg">Testmelding</button>
+    <div>
+      <button
+        type="button"
+        onClick={on ? disable : enable}
+        disabled={busy || unavailable}
+        title={note ?? label}
+        aria-pressed={on}
+        className={`${railItem} disabled:opacity-60 disabled:hover:bg-transparent`}
+      >
+        <Icon name={on ? "bell" : "bell-off"} size={18} className={`shrink-0 ${on ? "text-accent-soft" : ""}`} />
+        <RailLabel expanded={expanded}>{label}</RailLabel>
+      </button>
+      {expanded && (note || msg || on) && (
+        <div className="px-[11px] pb-1 text-[13px] text-faint">
+          {note ?? msg}
+          {on && !msg && (
+            <button type="button" onClick={test} disabled={busy} className="underline underline-offset-4 hover:text-muted">Testmelding sturen</button>
+          )}
         </div>
       )}
-      {state === "off" && (
-        <button onClick={enable} disabled={busy} className="rounded-lg px-3 py-1.5 text-sm border border-line hover:bg-panel-2 disabled:opacity-50 lg:w-full">
-          🔕 Meldingen aanzetten
-        </button>
-      )}
-      {state === "denied" && <p className="text-muted">Meldingen zijn geblokkeerd in je browserinstellingen.</p>}
-      {state === "ios-install" && <p className="text-muted">Voor meldingen op iPhone: Deel → Zet op beginscherm, en open LangDot daarvandaan.</p>}
-      {state === "unsupported" && <p className="text-muted">Deze browser ondersteunt geen meldingen.</p>}
-      {msg && <p className="text-muted">{msg}</p>}
     </div>
   );
 }

@@ -3,10 +3,11 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { PROVIDERS, type ProviderInfo } from "@/lib/connectors/registry";
+import { BLIND_SPOTS, PROVIDERS, type ProviderInfo } from "@/lib/connectors/registry";
 import type { ConnectorRow } from "@/lib/types";
-import { formatTime } from "./ui";
+import { btn, formatTime } from "./ui";
 import { DiagnosePanel } from "./DiagnosePanel";
+import { Icon } from "./Icon";
 
 const ERRORS: Record<string, string> = {
   state: "De koppeling kon niet veilig worden afgerond (sessie verlopen of ongeldige link). Probeer het opnieuw.",
@@ -38,54 +39,73 @@ function Card({ info, connector }: { info: ProviderInfo; connector?: ConnectorRo
     router.refresh();
   }
 
+  const statusLabel = soon
+    ? { text: "Binnenkort", dot: "bg-faint" }
+    : active && connector?.status === "needs_reauth"
+      ? { text: "Opnieuw verbinden nodig", dot: "bg-warn" }
+      : active
+        ? { text: "Verbonden", dot: "bg-ok" }
+        : null;
+
   return (
-    <div className={`rounded-2xl border p-4 ${soon ? "border-line/60 opacity-60" : "border-line bg-panel"}`}>
-      <div className="flex items-start gap-3">
-        <div className="w-10 h-10 rounded-xl bg-panel-2 flex items-center justify-center text-lg" aria-hidden>
-          {info.id === "gmail" ? "✉" : info.id === "google_calendar" ? "📅" : "📁"}
+    <div className={`rounded-2xl border p-5 ${soon ? "border-line opacity-70" : "border-line bg-panel"}`} style={soon ? undefined : { boxShadow: "var(--shadow-card)" }}>
+      <div className="flex items-start gap-3.5">
+        <div className="w-10 h-10 rounded-xl bg-panel-2 flex items-center justify-center text-muted shrink-0" aria-hidden>
+          <Icon name={info.id === "gmail" ? "mail" : info.id === "google_calendar" ? "calendar" : "folder"} size={20} />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h2 className="font-semibold">{info.label}</h2>
-            {soon && <span className="text-[11px] px-2 py-0.5 rounded-full bg-line text-muted">Binnenkort</span>}
-            {active && connector?.status === "active" && <span className="text-[11px] px-2 py-0.5 rounded-full bg-ok/15 text-ok">Verbonden</span>}
-            {active && connector?.status === "needs_reauth" && <span className="text-[11px] px-2 py-0.5 rounded-full bg-warn/20 text-warn">Opnieuw verbinden nodig</span>}
+          <div className="flex items-center gap-3 flex-wrap">
+            <h2 className="serif text-[20px] leading-tight">{info.label}</h2>
+            {statusLabel && (
+              <span className="inline-flex items-center gap-1.5 text-[13px] text-muted">
+                <span className={`w-1.5 h-1.5 rounded-full ${statusLabel.dot}`} aria-hidden />
+                {statusLabel.text}
+              </span>
+            )}
           </div>
-          <p className="text-sm text-muted mt-0.5">{info.description}</p>
+          <p className="text-[15px] text-muted mt-0.5">{info.description}</p>
           {active && (
-            <p className="text-sm mt-2">
-              Verbonden als <strong>{connector?.account_email ?? "onbekend account"}</strong>
-              <span className="text-muted"> · laatst gebruikt: {connector?.last_used_at ? formatTime(connector?.last_used_at ?? "") : "nog niet"}</span>
+            <p className="text-[14px] mt-2">
+              Verbonden als <strong className="font-medium">{connector?.account_email ?? "onbekend account"}</strong>
+              <span className="text-faint"> · laatst gebruikt: {connector?.last_used_at ? formatTime(connector.last_used_at) : "nog niet"}</span>
             </p>
           )}
         </div>
       </div>
 
       {!soon && (
-        <div className="grid sm:grid-cols-2 gap-3 mt-4 text-sm">
+        <div className="grid sm:grid-cols-2 gap-4 mt-5 text-[14px]">
           <div>
-            <div className="text-xs text-muted mb-1">Wat de dot wél kan</div>
-            <ul className="space-y-1">{info.can.map((c) => <li key={c}>✓ {c}</li>)}</ul>
+            <div className="text-[13px] text-faint mb-1.5">Wat de dot wél kan</div>
+            <ul className="space-y-1.5">
+              {info.can.map((c) => (
+                <li key={c} className="flex gap-2"><Icon name="check" size={15} className="text-ok mt-1 shrink-0" /><span>{c}</span></li>
+              ))}
+            </ul>
           </div>
           <div>
-            <div className="text-xs text-muted mb-1">Wat de dot níet kan</div>
-            <ul className="space-y-1">{info.cannot.map((c) => <li key={c}>✕ {c}</li>)}</ul>
+            <div className="text-[13px] text-faint mb-1.5">Wat de dot níet kan</div>
+            <ul className="space-y-1.5">
+              {info.cannot.map((c) => (
+                <li key={c} className="flex gap-2"><Icon name="x" size={15} className="text-faint mt-1 shrink-0" /><span className="text-muted">{c}</span></li>
+              ))}
+            </ul>
           </div>
         </div>
       )}
 
-      {error && <p className="text-bad text-sm mt-3">{error}</p>}
+      {error && <p className="text-bad text-[14px] mt-3">{error}</p>}
 
       {!soon && (
-        <div className="flex gap-2 mt-4">
+        <div className="flex gap-2 mt-5">
           {(!active || connector?.status === "needs_reauth") && info.connectPath && (
             // Gewone link: de browser moet naar Google navigeren (geen fetch).
-            <a href={info.connectPath} className="rounded-lg bg-accent text-white px-4 py-2 text-sm font-medium hover:brightness-110">
+            <a href={info.connectPath} className={btn.primary}>
               {active ? "Opnieuw verbinden" : "Verbinden"}
             </a>
           )}
           {active && (
-            <button onClick={disconnect} disabled={busy} className="rounded-lg border border-line px-4 py-2 text-sm hover:bg-panel-2 disabled:opacity-50">
+            <button onClick={disconnect} disabled={busy} className={btn.secondary}>
               {busy ? "Ontkoppelen…" : "Ontkoppelen"}
             </button>
           )}
@@ -97,19 +117,42 @@ function Card({ info, connector }: { info: ProviderInfo; connector?: ConnectorRo
 
 export function ConnectionsView({ connectors, connected, error }: { connectors: ConnectorRow[]; connected: string | null; error: string | null }) {
   return (
-    <main className="min-h-full px-4 py-8">
-      <div className="max-w-2xl mx-auto space-y-4">
-        <div className="flex items-center gap-3">
-          <Link href="/" className="text-sm text-muted hover:text-fg">← Terug naar je dot</Link>
-        </div>
-        <h1 className="text-2xl font-semibold">Verbindingen</h1>
-        <p className="text-sm text-muted">
-          Koppel je eigen accounts. Je dot vraagt altijd eerst jouw goedkeuring voordat hij iets namens je verstuurt.
+    <main className="min-h-full px-4 py-8 sm:py-12">
+      <div className="max-w-2xl mx-auto space-y-5">
+        <Link href="/" className="inline-flex items-center gap-1.5 text-[14px] text-muted hover:text-fg min-h-11 sm:min-h-0">
+          <Icon name="chevron-left" size={16} />
+          Terug naar je dot
+        </Link>
+        <h1 className="serif text-[34px] leading-tight">Verbindingen</h1>
+        <p className="text-[15px] text-muted">
+          Koppel je eigen accounts. Je dot vraagt altijd eerst jouw goedkeuring voordat hij iets namens je verstuurt, tenzij je dat zelf voor een schema hebt aangezet.
           Je kunt een verbinding op elk moment ontkoppelen.
         </p>
-        {connected && <div className="rounded-lg border border-ok/40 bg-ok/10 text-ok text-sm px-3 py-2">Verbonden! Je dot kan nu met {PROVIDERS.find((p) => p.id === connected)?.label ?? "deze dienst"} werken.</div>}
-        {error && <div className="rounded-lg border border-bad/40 bg-bad/10 text-bad text-sm px-3 py-2">{ERRORS[error] ?? "Er ging iets mis bij het koppelen."}</div>}
+        {connected && (
+          <div role="status" className="rounded-xl border border-line bg-panel px-4 py-3 text-[14px] flex items-center gap-2">
+            <Icon name="check" size={16} className="text-ok shrink-0" />
+            Verbonden. Je dot kan nu met {PROVIDERS.find((p) => p.id === connected)?.label ?? "deze dienst"} werken.
+          </div>
+        )}
+        {error && (
+          <div role="alert" className="rounded-xl border border-line bg-panel px-4 py-3 text-[14px] flex items-start gap-2">
+            <Icon name="alert" size={16} className="text-bad mt-0.5 shrink-0" />
+            {ERRORS[error] ?? "Er ging iets mis bij het koppelen."}
+          </div>
+        )}
         {PROVIDERS.map((p) => <Card key={p.id} info={p} connector={connectors.find((c) => c.provider === p.id)} />)}
+        <div className="rounded-2xl border border-line bg-panel p-5">
+          <h2 className="serif text-[20px] leading-tight">Wat de dot bewust niet ziet</h2>
+          <p className="text-[15px] text-muted mt-1">
+            Dit is een ontwerpkeuze: de dot ziet alleen je persoonlijke Gmail en Agenda. Gaat een vraag over werk, stage of school,
+            dan zegt hij dat meteen, en kun je de tekst plakken of de mail doorsturen naar je Gmail.
+          </p>
+          <ul className="mt-3 space-y-1.5 text-[14px]">
+            {BLIND_SPOTS.map((b) => (
+              <li key={b} className="flex gap-2"><Icon name="x" size={15} className="text-faint mt-1 shrink-0" /><span className="text-muted">{b}</span></li>
+            ))}
+          </ul>
+        </div>
         <DiagnosePanel />
       </div>
     </main>

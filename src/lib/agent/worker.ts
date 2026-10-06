@@ -37,6 +37,13 @@ class StepLimitError extends Error {
 
 const nowIso = () => new Date().toISOString();
 
+/** Rustige melding voor tijdelijke onderbrekingen; de dot probeert het vanzelf opnieuw. */
+function waitingNote(kind: string) {
+  if (kind === "budget") return "Wacht: het dagelijkse tegoed is op. Gaat vanzelf verder zodra er ruimte is.";
+  if (kind === "rate_limit") return "Even wachten: het taalmodel is druk. De dot probeert het zo vanzelf opnieuw.";
+  return "Even wachten: het taalmodel reageerde niet. De dot probeert het over een minuut vanzelf opnieuw.";
+}
+
 export async function runWorker(opts: { userId?: string; deadline?: number } = {}) {
   const deadline = opts.deadline ?? Date.now() + 45_000;
   const db = createAdminClient();
@@ -67,7 +74,7 @@ export async function runWorker(opts: { userId?: string; deadline?: number } = {
         // Budget: elke 15 minuten opnieuw kijken (kost geen tokens). Verhoogt de gebruiker het budget, dan gaat de
         // taak vanzelf verder; anders start het nieuwe budget na middernacht.
         const until = new Date(Date.now() + (e.kind === "budget" ? 15 : e.kind === "unavailable" ? 1 : 5) * 60_000);
-        await db.from("dot_tasks").update({ locked_until: until.toISOString(), error: e.message })
+        await db.from("dot_tasks").update({ locked_until: until.toISOString(), error: waitingNote(e.kind) })
           .eq("id", task.id).eq("status", "running");
         await logAudit(db, { userId: task.user_id, actor: "system", action: `waiting_${e.kind}`, taskId: task.id, output: e.message });
         break;
@@ -217,7 +224,7 @@ async function planTask(db: SupabaseClient, task: Task) {
   if (!titles.length) titles = [task.title];
 
   const steps: Step[] = titles.slice(0, 6).map((title) => ({ title, status: "pending" }));
-  await saveRunning(db, task, { steps, current_step: 0, locked_until: null });
+  await saveRunning(db, task, { steps, current_step: 0, locked_until: null, error: null });
   await logAudit(db, { userId: task.user_id, actor: "agent", action: "plan", taskId: task.id, output: { steps: titles } });
 }
 
@@ -233,6 +240,7 @@ async function executeStep(db: SupabaseClient, task: Task, deadline: number) {
     db, userId: task.user_id, taskId: task.id, origin: "worker", gmail: ctx.gmail, calendar: ctx.calendar, createdActionIds: [],
     standing: await standingPermission(db, task, ctx.gmail.email),
     // Alleen de laatste stap, of een stap die zelf over mailen gaat, mag een mail opstellen/versturen.
+    dedupeLinks: task.source === "schedule",
     allowMailTools: index === steps.length - 1 || /mail|stuur|verstuur|concept|opstel|bericht/i.test(steps[index]?.title ?? ""),
   };
   const tools = workerTools(toolCtx);
@@ -351,7 +359,7 @@ async function saveScratch(db: SupabaseClient, taskId: string, scratch: Scratch 
 async function completeStep(db: SupabaseClient, task: Task, index: number, result: string) {
   const steps: Step[] = [...task.steps];
   steps[index] = { ...steps[index], status: "done", result: result.slice(0, 4000) };
-  await saveRunning(db, task, { steps, current_step: index + 1, locked_until: null });
+  await saveRunning(db, task, { steps, current_step: index + 1, locked_until: null, error: null });
   await saveScratch(db, task.id, null);
   await logAudit(db, { userId: task.user_id, actor: "agent", action: "step_done", taskId: task.id, input: { step: index + 1, title: steps[index].title } });
 }

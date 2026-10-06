@@ -5,6 +5,7 @@
 import { DateTime } from "luxon";
 import { approveByStandingPermission, createAction, createEmailAction, executePendingAction, type ActionStore, type ExecDeps } from "@/lib/actions";
 import { wrapUntrusted } from "@/lib/web";
+import { findConflicts, freeSlots, type CalEvent } from "@/lib/calendar-utils";
 
 export type MailToolDeps = {
   store: ActionStore;
@@ -135,12 +136,13 @@ export async function calendarListEvents(deps: MailToolDeps, userId: string, arg
   if (!from.isValid || !to.isValid || to.toMillis() <= from.toMillis()) throw new Error("Ongeldige periode (from/to)");
   if (to.toMillis() - from.toMillis() > 62 * 86_400_000) throw new Error("Periode mag maximaal 2 maanden zijn");
   const token = await deps.getAccessToken(userId, "google_calendar");
-  const events = await deps.listEvents(token, {
+  const events = (await deps.listEvents(token, {
     from: from.toISO()!,
     to: to.toISO()!,
     query: typeof args.query === "string" ? args.query.slice(0, 100) : undefined,
-  });
-  return wrapUntrusted("calendar:primary", { time_zone: zone, from: from.toISO(), to: to.toISO(), events });
+  })) as unknown[];
+  const conflicts = findConflicts(events as CalEvent[]);
+  return wrapUntrusted("calendar:primary", { time_zone: zone, from: from.toISO(), to: to.toISO(), events, conflicts });
 }
 
 export async function calendarCreateEvent(deps: MailToolDeps, ctx: MailToolCtx, args: Record<string, unknown>) {
@@ -166,4 +168,29 @@ export async function calendarCreateEvent(deps: MailToolDeps, ctx: MailToolCtx, 
     status: "pending",
     note: `De afspraak staat in een goedkeuringskaart (Inplannen/Afwijzen). ${APPROVAL_NOTE}`,
   };
+}
+
+export async function calendarFreeSlots(deps: MailToolDeps, userId: string, args: Record<string, unknown>) {
+  if (!deps.listEvents) throw new Error("Agenda bekijken is niet beschikbaar");
+  const zone = "Europe/Amsterdam";
+  const from = DateTime.fromISO(String(args.from ?? ""), { zone });
+  const to = DateTime.fromISO(String(args.to ?? ""), { zone });
+  if (!from.isValid || !to.isValid || to.toMillis() <= from.toMillis()) throw new Error("Ongeldige periode (from/to)");
+  if (to.toMillis() - from.toMillis() > 31 * 86_400_000) throw new Error("Periode mag maximaal 31 dagen zijn");
+  const minutes = Math.min(Math.max(Number(args.duration_minutes) || 30, 5), 480);
+  const token = await deps.getAccessToken(userId, "google_calendar");
+  const events = (await deps.listEvents(token, { from: from.toISO()!, to: to.toISO()! })) as CalEvent[];
+  return wrapUntrusted("calendar:free-slots", {
+    time_zone: zone,
+    minimale_duur_minuten: minutes,
+    vrije_blokken: freeSlots(events, {
+      from: from.toISO()!,
+      to: to.toISO()!,
+      minMinutes: minutes,
+      zone,
+      dayStart: typeof args.day_start === "string" ? args.day_start : undefined,
+      dayEnd: typeof args.day_end === "string" ? args.day_end : undefined,
+    }),
+    conflicten: findConflicts(events),
+  });
 }

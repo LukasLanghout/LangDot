@@ -2,6 +2,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createHash } from "node:crypto";
 import { extensionOf, extractText, MAX_TEXT_CHARS } from "./extract";
 
 export const BUCKET = "documents";
@@ -31,12 +32,21 @@ export async function createFromStorage(
   userId: string,
   input: { path: string; name: string; mime: string; size: number; ocrText?: string | null },
   db: SupabaseClient = createAdminClient(),
-) {
+): Promise<DocumentMeta & { duplicate?: boolean }> {
   if (!input.path.startsWith(`${userId}/`) || input.path.includes("..")) throw new Error("Ongeldig pad");
   const { data: blob, error } = await db.storage.from(BUCKET).download(input.path);
   if (error || !blob) throw new Error("Bestand niet gevonden in de opslag");
   const buf = Buffer.from(await blob.arrayBuffer());
   if (buf.length > MAX_UPLOAD_BYTES) throw new Error("Bestand is groter dan 25 MB");
+
+  const sha256 = createHash("sha256").update(buf).digest("hex");
+  const dupe = await findDuplicate(db, userId, sha256);
+  if (dupe) {
+    // Nieuwe upload is overbodig: weg ermee. Een eerdere mislukte uitlezing vervangen we (dat is "opnieuw proberen").
+    if (dupe.storage_path !== input.path) await db.storage.from(BUCKET).remove([input.path]);
+    if (dupe.status !== "failed") return { ...dupe, duplicate: true } as DocumentMeta & { duplicate: true };
+    await deleteDocument(userId, dupe.id, db);
+  }
 
   const mime = input.mime || blob.type || "application/octet-stream";
   let extracted = await extractText(buf, input.name, mime);
@@ -45,7 +55,7 @@ export async function createFromStorage(
     extracted = { status: "ready", text: input.ocrText.trim().slice(0, MAX_TEXT_CHARS), kind: "image-ocr" };
   }
 
-  const { data, error: insErr } = await db.from("documents").insert({
+  const row = {
     user_id: userId,
     name: safeFileName(input.name),
     mime,
@@ -55,8 +65,39 @@ export async function createFromStorage(
     text_chars: extracted.text.length,
     status: extracted.status,
     error: extracted.error ?? null,
-  }).select(META_COLUMNS).single();
+  };
+  // Met inhoudshash (migratie 0009). Bestaat de kolom nog niet, dan slaan we zonder hash op.
+  let { data, error: insErr } = await db.from("documents").insert({ ...row, sha256 }).select(META_COLUMNS).single();
+  if (insErr && /sha256/i.test(insErr.message)) {
+    ({ data, error: insErr } = await db.from("documents").insert(row).select(META_COLUMNS).single());
+  }
   if (insErr) throw new Error(`Opslaan mislukt: ${insErr.message}`);
+  return data as DocumentMeta;
+}
+
+/** Zelfde inhoud al aanwezig? Gelezen of onleesbaar: houd het bestaande. Mislukt: ruim het op en probeer opnieuw. */
+async function findDuplicate(db: SupabaseClient, userId: string, sha256: string) {
+  const { data, error } = await db.from("documents").select(META_COLUMNS).eq("user_id", userId).eq("sha256", sha256).maybeSingle();
+  if (error) return null; // kolom ontbreekt: geen ontdubbeling
+  return (data as DocumentMeta | null) ?? null;
+}
+
+/** Leest een bestaand document opnieuw uit de opslag (na een mislukte of onvolledige uitlezing). */
+export async function retryExtraction(userId: string, id: string, db: SupabaseClient = createAdminClient()) {
+  const { data: row } = await db.from("documents").select("id, name, mime, storage_path").eq("user_id", userId).eq("id", id).maybeSingle();
+  if (!row) throw new Error("Document niet gevonden");
+  if (!row.storage_path) throw new Error("Dit document is geplakte tekst en hoeft niet opnieuw gelezen te worden");
+  const { data: blob, error } = await db.storage.from(BUCKET).download(row.storage_path);
+  if (error || !blob) throw new Error("Bestand niet gevonden in de opslag");
+  const buf = Buffer.from(await blob.arrayBuffer());
+  const extracted = await extractText(buf, row.name, row.mime);
+  const { data, error: upErr } = await db.from("documents").update({
+    text: extracted.text || null,
+    text_chars: extracted.text.length,
+    status: extracted.status,
+    error: extracted.error ?? null,
+  }).eq("id", id).eq("user_id", userId).select(META_COLUMNS).single();
+  if (upErr) throw new Error(`Opslaan mislukt: ${upErr.message}`);
   return data as DocumentMeta;
 }
 

@@ -7,6 +7,7 @@ import { getAccessToken } from "@/lib/connectors/store";
 import { sendGmail } from "@/lib/connectors/gmail";
 import { createCalendarEvent } from "@/lib/connectors/calendar";
 import { loadAttachment } from "@/lib/documents/store";
+import { recordSentLinks } from "@/lib/sent-links";
 import type { ActionStore, ExecDeps, PendingAction } from "@/lib/actions";
 
 export function supabaseActionStore(db: SupabaseClient = createAdminClient()): ActionStore {
@@ -54,6 +55,11 @@ export function defaultExecDeps(db: SupabaseClient = createAdminClient()): ExecD
     send: (token, payload, files) => sendGmail(token, { ...payload, gmailDraftId: payload.gmail_draft_id ?? null }, files),
     loadAttachment: (userId, documentId) => loadAttachment(userId, documentId, db),
     createEvent: (token, payload) => createCalendarEvent(token, payload),
+    recordLinks: (userId, body) => recordSentLinks(db, userId, body),
+    deleteSchedule: async (userId, scheduleId) => {
+      const { data } = await db.from("dot_schedules").delete().eq("user_id", userId).eq("id", scheduleId).select("id");
+      return data?.length ?? 0;
+    },
     grantAutoSend: async (userId, payload) => {
       const { data } = await db.from("dot_schedules")
         .update({ auto_send: true, auto_send_to: payload.to, auto_send_granted_at: new Date().toISOString() })

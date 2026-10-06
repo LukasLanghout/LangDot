@@ -68,9 +68,11 @@ function rtfToText(rtf: string) {
 async function pdf(buf: Buffer) {
   const { extractText, getDocumentProxy } = (await import("unpdf")) as any;
   const doc = await getDocumentProxy(new Uint8Array(buf));
-  const { text, totalPages } = await extractText(doc, { mergePages: true });
-  const t = String(Array.isArray(text) ? text.join("\n\n") : text);
-  if (!t.trim()) {
+  const { text, totalPages } = await extractText(doc, { mergePages: false });
+  const pages: string[] = Array.isArray(text) ? text.map((p: unknown) => String(p ?? "")) : [String(text ?? "")];
+  // Paginamarkeringen zodat de dot kan citeren ("cv.pdf, pagina 2").
+  const t = pages.map((p, i) => `[pagina ${i + 1}]\n${p.trim()}`).join("\n\n");
+  if (!pages.some((p) => p.trim())) {
     return { status: "unsupported" as const, text: "", kind: "pdf", error: `PDF zonder tekstlaag (${totalPages} pagina's, waarschijnlijk gescand)` };
   }
   return { status: "ready" as const, text: t, kind: "pdf" };

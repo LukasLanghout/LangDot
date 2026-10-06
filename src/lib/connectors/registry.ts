@@ -62,6 +62,13 @@ export const PROVIDERS: ProviderInfo[] = [
   },
 ];
 
+/** Bewust NIET gekoppeld: een ontwerpkeuze, geen ontbrekende functie. Gebruikt door de prompt én de Verbindingen-pagina. */
+export const BLIND_SPOTS = [
+  "Werkmail (Outlook / Microsoft 365)",
+  "Lancyr-, Fontys- en Innova-accounts (mail, agenda, bestanden)",
+  "Agenda's en mailboxen van werk of school",
+];
+
 export function providerInfo(id: string) {
   return PROVIDERS.find((p) => p.id === id);
 }

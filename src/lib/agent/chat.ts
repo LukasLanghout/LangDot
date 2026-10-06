@@ -5,6 +5,8 @@ import { chatSystemPrompt, loadAgentContext } from "./prompts";
 import type { Message, Step } from "@/lib/types";
 import { readDocument } from "@/lib/documents/store";
 import { createAction } from "@/lib/actions";
+import { isWorkTopic, WORK_NOTICE, workPrefix } from "./capabilities";
+import { enforceStyle, stylePrefsFrom } from "./style";
 import { supabaseActionStore } from "@/lib/actions-store";
 import { wrapUntrusted } from "@/lib/web";
 
@@ -21,7 +23,12 @@ const MAX_ROUNDS = 5;
 /** Lange oude berichten inkorten: scheelt veel tokens per beurt. */
 const MAX_HISTORY_CHARS = 1500;
 const clip = (s: string, n = MAX_HISTORY_CHARS) => (s.length > n ? `${s.slice(0, n)} …[ingekort]` : s);
-const NO_REPLY = "(Op dit bericht is geen antwoord gegeven. Niet meer oppakken tenzij de gebruiker erom vraagt.)";
+/** Tools die niets wijzigen en dus veilig tegelijk kunnen draaien. */
+const READ_ONLY_TOOLS = new Set([
+  "web_search", "web_fetch", "memory_read", "calendar_list_events", "calendar_free_slots", "gmail_search", "gmail_read",
+  "document_list", "document_read", "document_search", "calculate", "datetime", "list_schedules",
+]);
+const NO_REPLY ="(Op dit bericht is geen antwoord gegeven. Niet meer oppakken tenzij de gebruiker erom vraagt.)";
 
 /**
  * Zet de opgeslagen berichten om naar model-history. Een gebruikersbericht zonder antwoord
@@ -135,12 +142,16 @@ async function attachedDocuments(db: SupabaseClient, userId: string, ids: string
 export function unverifiedClaimWarning(text: string, called: Set<string>) {
   const notes: string[] = [];
   const scheduleClaim = /(schema|check-?in)/i.test(text) && /(aangemaakt|ingepland|draait|draaien|staat\b|staan\b|klaar)/i.test(text);
-  if (scheduleClaim && !called.has("create_schedule")) {
+  const scheduleTools = ["create_schedule", "update_schedule", "pause_schedule", "run_now", "delete_schedule"];
+  if (scheduleClaim && !scheduleTools.some((t) => called.has(t))) {
     notes.push("Ik heb in deze beurt géén schema aangemaakt, ook al leest mijn antwoord zo. Controleer **Gepland**, of maak het daar zelf aan met **+ Nieuw schema**.");
   }
   const mailClaim = /\b(is|zijn|heb ik|hebben we)\b[^.!?\n]{0,40}\b(verstuurd|gemaild|verzonden)\b/i.test(text);
   if (mailClaim && !called.has("gmail_create_draft") && !called.has("gmail_send")) {
     notes.push("Ik heb in deze beurt géén mail verstuurd, ook al leest mijn antwoord zo.");
+  }
+  if (called.has("web_search") && !/https?:\/\//.test(text)) {
+    notes.push("Dit antwoord bevat geen bronlinks, ook al is er gezocht. Behandel het als onbevestigd.");
   }
   return notes.length ? `\n\n⚠ ${notes.join("\n\n⚠ ")}` : "";
 }
@@ -153,6 +164,8 @@ export async function runChat(opts: {
   userText: string;
   /** Bij dit bericht gevoegde documenten (al gecontroleerd: van deze gebruiker). */
   documentIds?: string[];
+  /** Stop-knop: breekt de modelaanroep af. */
+  signal?: AbortSignal;
   send: (e: ChatEvent) => void;
 }): Promise<{ text: string; createdTask: boolean; meta: Message["meta"] }> {
   const { db, userId, send } = opts;
@@ -173,7 +186,10 @@ export async function runChat(opts: {
     { role: "user", content: opts.userText + (await attachedDocuments(db, userId, opts.documentIds ?? [])) },
   ];
 
-  const toolCtx: ToolContext = { db, userId, taskId: null, origin: "chat", gmail: ctx.gmail, calendar: ctx.calendar, createdActionIds: [] };
+  const toolCtx: ToolContext = {
+    db, userId, taskId: null, origin: "chat", gmail: ctx.gmail, calendar: ctx.calendar, createdActionIds: [],
+    userText: opts.userText, // bewijs voor memory_write: alleen wat hier letterlijk in staat mag onthouden worden
+  };
   const activity = new ChatActivity(db, userId, opts.userText);
   const tools = chatTools(toolCtx);
   // Het antwoord is de tekst van de LAATSTE ronde. Modellen schrijven vaak al tekst vóór een tool-call
@@ -181,6 +197,9 @@ export async function runChat(opts: {
   let roundText = "";
   let interimText = "";
   const calledTools = new Set<string>();
+
+  // Werk-onderwerp (Lancyr, Fontys, Innova, Outlook): de beperking staat meteen in de eerste zin, door de server.
+  if (isWorkTopic(opts.userText)) send({ t: "text", d: `${WORK_NOTICE}\n\n` });
 
   try {
     for (let round = 0; round <= MAX_ROUNDS; round++) {
@@ -191,6 +210,7 @@ export async function runChat(opts: {
         tools,
         toolChoice: last ? "none" : "auto", // laatste ronde: afronden zonder tools
         userId,
+        signal: opts.signal,
         onText: (d) => {
           if (!roundText && interimText) send({ t: "reset" });
           roundText += d;
@@ -204,7 +224,8 @@ export async function runChat(opts: {
       if (roundText.trim()) interimText = roundText;
 
       messages.push({ role: "assistant", content: result.content || null, tool_calls: result.toolCalls });
-      for (const call of result.toolCalls) {
+
+      const announce = async (call: (typeof result.toolCalls)[number]) => {
         const name = call.function.name;
         calledTools.add(name);
         send({ t: "tool", name });
@@ -212,8 +233,19 @@ export async function runChat(opts: {
           await activity.step(stepTitle(name, parseArgs(call.function.arguments)));
           toolCtx.taskId = activity.taskId;
         }
-        const out = await executeTool(toolCtx, name, call.function.arguments);
-        messages.push({ role: "tool", tool_call_id: call.id, content: out });
+      };
+
+      if (result.toolCalls.length > 1 && result.toolCalls.every((c) => READ_ONLY_TOOLS.has(c.function.name))) {
+        // Alleen-lezen aanroepen (agenda, mail, web …) tegelijk uitvoeren; de volgorde van de antwoorden blijft gelijk.
+        for (const call of result.toolCalls) await announce(call);
+        const outs = await Promise.all(result.toolCalls.map((c) => executeTool(toolCtx, c.function.name, c.function.arguments)));
+        result.toolCalls.forEach((c, i) => messages.push({ role: "tool", tool_call_id: c.id, content: outs[i] }));
+      } else {
+        for (const call of result.toolCalls) {
+          await announce(call);
+          const out = await executeTool(toolCtx, call.function.name, call.function.arguments);
+          messages.push({ role: "tool", tool_call_id: call.id, content: out });
+        }
       }
     }
   } catch (e) {
@@ -223,7 +255,10 @@ export async function runChat(opts: {
   }
 
   // Gaf de laatste ronde geen tekst, dan blijft de tussentekst het antwoord.
-  let text = roundText.trim() || interimText.trim();
+  // Stijlvoorkeuren uit het geheugen (kort, geen emoji, geen afsluitvraag) in code afdwingen.
+  let text = enforceStyle(roundText.trim() || interimText.trim(), stylePrefsFrom(ctx.memories));
+  const prefix = workPrefix(opts.userText, text);
+  if (prefix) text = `${prefix}\n\n${text}`;
   text += unverifiedClaimWarning(text, calledTools);
 
   // Gevraagd om automatisch naar jezelf te mailen: één toestemmingskaart voor alle schema's van deze beurt.

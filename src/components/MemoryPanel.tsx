@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import type { Memory, MemoryKind } from "@/lib/types";
-import { formatTime } from "./ui";
+import { btn, chip, field, formatTime, textBtn } from "./ui";
+import { Icon } from "./Icon";
 
 const KINDS: { id: MemoryKind; label: string }[] = [
   { id: "preference", label: "Voorkeur" },
@@ -23,18 +24,17 @@ function MemoryRow({ memory, onSave, onDelete }: {
 
   if (editing) {
     return (
-      <li className="rounded-lg border border-accent/50 bg-panel-2 p-2.5 space-y-2">
-        <select value={kind} onChange={(e) => setKind(e.target.value as MemoryKind)} className="bg-panel border border-line rounded px-2 py-1 text-xs">
+      <li className="rounded-2xl border border-accent-soft/60 bg-panel p-3.5 space-y-2.5">
+        <select value={kind} onChange={(e) => setKind(e.target.value as MemoryKind)} aria-label="Soort notitie" className={`${field} !w-auto`}>
           {KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
         </select>
-        <textarea value={content} onChange={(e) => setContent(e.target.value)} rows={3}
-          className="w-full rounded bg-panel border border-line px-2 py-1.5 text-sm outline-none focus:border-accent" />
-        <div className="flex gap-2 justify-end text-xs">
-          <button onClick={() => { setEditing(false); setContent(memory.content); setKind(memory.kind); }} className="text-muted hover:text-fg">Annuleren</button>
+        <textarea value={content} onChange={(e) => setContent(e.target.value)} rows={3} aria-label="Inhoud" className={field} />
+        <div className="flex gap-2 justify-end">
+          <button onClick={() => { setEditing(false); setContent(memory.content); setKind(memory.kind); }} className={btn.ghost}>Annuleren</button>
           <button
             onClick={async () => { await onSave(memory, content.trim(), kind); setEditing(false); }}
             disabled={!content.trim()}
-            className="rounded bg-accent text-white px-2.5 py-1 disabled:opacity-50"
+            className={btn.primary}
           >
             Opslaan
           </button>
@@ -44,16 +44,17 @@ function MemoryRow({ memory, onSave, onDelete }: {
   }
 
   return (
-    <li className="group rounded-lg border border-line bg-panel-2 p-2.5">
-      <div className="flex items-center gap-2 text-[11px] text-muted mb-1">
-        <span className="px-1.5 rounded-full bg-line">{kindLabel(memory.kind)}</span>
+    <li className="group rounded-2xl border border-line bg-panel p-3.5">
+      <div className="flex items-center gap-2 text-[13px] text-faint mb-1">
+        <span>{kindLabel(memory.kind)}</span>
+        <span aria-hidden>·</span>
         <span>{formatTime(memory.updated_at)}</span>
-        <span className="ml-auto flex gap-2 opacity-100 lg:opacity-0 group-hover:opacity-100">
-          <button onClick={() => setEditing(true)} className="hover:text-fg">bewerk</button>
-          <button onClick={() => confirm("Notitie verwijderen?") && onDelete(memory)} className="hover:text-bad">verwijder</button>
+        <span className="ml-auto flex gap-1 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100 transition-opacity">
+          <button onClick={() => setEditing(true)} className={textBtn} aria-label="Notitie bewerken">Bewerk</button>
+          <button onClick={() => confirm("Notitie verwijderen?") && onDelete(memory)} className={`${textBtn} hover:!text-bad`} aria-label="Notitie verwijderen">Verwijder</button>
         </span>
       </div>
-      <div className="text-sm whitespace-pre-wrap">{memory.content}</div>
+      <div className="text-[15px] whitespace-pre-wrap">{memory.content}</div>
     </li>
   );
 }
@@ -111,43 +112,42 @@ export function MemoryPanel({ memories, cauraFleet }: { memories: Memory[]; caur
   const shown = filter === "all" ? visible : visible.filter((m) => m.kind === filter);
 
   return (
-    <div className="space-y-3">
-      <p className="text-xs text-muted">
+    <div className="space-y-4">
+      <p className="text-[14px] text-muted">
         Wat je dot over je onthoudt. Hij schrijft hier zelf in, en gebruikt het in elk gesprek en elke taak.
       </p>
       {cauraFleet && (
-        <p className="text-xs rounded-lg border border-accent/40 bg-accent/10 px-2.5 py-1.5">
-          Gedeeld via Caura · fleet <code className="break-all">{cauraFleet}</code>
-          <br />
-          <span className="text-muted">Andere dots/agents die in deze fleet schrijven, delen deze kennis.</span>
+        <p className="text-[13px] rounded-xl border border-line bg-panel-2 px-3.5 py-2.5 text-muted">
+          Gedeeld via Caura, fleet <code className="break-all text-fg">{cauraFleet}</code>. Andere dots of agents die in deze fleet schrijven, delen deze kennis.
         </p>
       )}
 
-      <form onSubmit={add} className="rounded-lg border border-line p-2.5 space-y-2">
-        <textarea value={newContent} onChange={(e) => setNewContent(e.target.value)} rows={2} placeholder="Nieuwe notitie…"
-          className="w-full rounded bg-panel-2 border border-line px-2 py-1.5 text-sm outline-none focus:border-accent" />
+      <form onSubmit={add} className="rounded-2xl border border-line bg-panel p-3.5 space-y-2.5">
+        <textarea value={newContent} onChange={(e) => setNewContent(e.target.value)} rows={2} placeholder="Nieuwe notitie…" aria-label="Nieuwe notitie" className={field} />
         <div className="flex gap-2 items-center">
-          <select value={newKind} onChange={(e) => setNewKind(e.target.value as MemoryKind)} className="bg-panel-2 border border-line rounded px-2 py-1 text-xs">
+          <select value={newKind} onChange={(e) => setNewKind(e.target.value as MemoryKind)} aria-label="Soort notitie" className={`${field} !w-auto`}>
             {KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
           </select>
-          <button disabled={!newContent.trim()} className="ml-auto rounded bg-accent text-white px-3 py-1 text-sm disabled:opacity-40">Toevoegen</button>
+          <button disabled={!newContent.trim()} className={`${btn.primary} ml-auto`}>
+            <Icon name="plus" size={15} />
+            Toevoegen
+          </button>
         </div>
       </form>
 
-      <div className="flex gap-1 flex-wrap text-xs">
+      <div className="flex gap-1.5 flex-wrap" role="group" aria-label="Filter op soort">
         {[{ id: "all" as const, label: "Alles" }, ...KINDS].map((k) => (
-          <button key={k.id} onClick={() => setFilter(k.id)}
-            className={`px-2 py-1 rounded-full border ${filter === k.id ? "border-accent text-fg" : "border-line text-muted"}`}>
+          <button key={k.id} onClick={() => setFilter(k.id)} aria-pressed={filter === k.id} className={chip(filter === k.id)}>
             {k.label}
           </button>
         ))}
       </div>
 
-      {error && <p className="text-bad text-xs">{error}</p>}
+      {error && <p className="text-bad text-[13px]">{error}</p>}
       {shown.length === 0 ? (
-        <p className="text-sm text-muted">Nog niets onthouden.</p>
+        <p className="text-[15px] text-muted">Nog niets onthouden.</p>
       ) : (
-        <ul className="space-y-2">
+        <ul className="space-y-2.5">
           {shown.map((m) => <MemoryRow key={m.id} memory={m} onSave={save} onDelete={remove} />)}
         </ul>
       )}

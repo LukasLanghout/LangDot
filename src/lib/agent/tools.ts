@@ -9,8 +9,11 @@ import { getAccessToken } from "@/lib/connectors/store";
 import { createGmailDraft, readGmail, searchGmail } from "@/lib/connectors/gmail";
 import { listCalendarEvents } from "@/lib/connectors/calendar";
 import { getDocuments, listDocuments, readDocument, searchDocuments } from "@/lib/documents/store";
+import { runCalculate, runDatetime, runScheduleTool, SCHEDULE_TOOLS, UTILITY_TOOLS } from "./extra-tools";
+import { decideMemoryWrite } from "./memory-rules";
+import { dropSentResults, recentSentUrls } from "@/lib/sent-links";
 import { defaultExecDeps, supabaseActionStore } from "@/lib/actions-store";
-import { calendarCreateEvent, calendarListEvents, gmailCreateDraft, gmailRead, gmailSearch, gmailSend, type MailToolDeps } from "./mail-tools";
+import { calendarCreateEvent, calendarFreeSlots, calendarListEvents, gmailCreateDraft, gmailRead, gmailSearch, gmailSend, type MailToolDeps } from "./mail-tools";
 
 export type ToolContext = {
   db: SupabaseClient;
@@ -35,6 +38,12 @@ export type ToolContext = {
   agentId?: string;
   /** Worker: false in stappen die niet de mailstap zijn; dan krijgt het model geen opsteller/verzender aangeboden. */
   allowMailTools?: boolean;
+  /** Geplande taken: laat links weg die al in een eerdere nieuwsbrief stonden (houdt dubbele items tegen). */
+  dedupeLinks?: boolean;
+  /** Het laatste bericht van de gebruiker (chat): bewijs voor memory_write. */
+  userText?: string;
+  /** Mislukte aanroepen per tool in deze beurt/stap; na 3 stoppen we met die tool. */
+  toolFailures?: Record<string, number>;
   /** Voor tests: vervang de mail-afhankelijkheden. */
   mailDeps?: MailToolDeps;
 };
@@ -54,13 +63,20 @@ const memoryRead = tool(
 
 const memoryWrite = tool(
   "memory_write",
-  "Sla een blijvende notitie op (of werk een bestaande bij via id). Alleen duurzame info; nooit wachtwoorden of geheimen.",
+  "Sla een blijvende notitie op (of werk een bestaande bij via id). ALLEEN wat de gebruiker letterlijk zegt of bevestigt; " +
+    "afgeleide dingen sla je niet op maar vraag je eerst na. Nooit wachtwoorden of geheimen.",
   {
     content: { type: "string", description: "De notitie, kort en concreet" },
     kind: { type: "string", enum: MEMORY_KINDS },
+    source: {
+      type: "string",
+      enum: ["gezegd", "handmatig", "afgeleid"],
+      description: "gezegd = de gebruiker zei of bevestigde het; handmatig = rooster of planning die hij zelf aanlevert; afgeleid = jouw conclusie (wordt NIET opgeslagen)",
+    },
+    evidence: { type: "string", description: "De letterlijke woorden van de gebruiker uit zijn laatste bericht (bij een bevestiging: zijn 'ja')" },
     id: { type: "string", description: "Id van bestaande notitie om bij te werken (optioneel)" },
   },
-  ["content", "kind"],
+  ["content", "kind", "source", "evidence"],
 );
 
 const webSearchTool = tool(
@@ -240,6 +256,19 @@ export const CALENDAR_CREATE_EVENT = tool(
   ["summary", "start", "end"],
 );
 
+const calendarFreeSlotsTool = tool(
+  "calendar_free_slots",
+  "Vind vrije tijd in de agenda (door code berekend, werktijden standaard ma t/m vr 09:00 tot 18:00). Geeft ook conflicterende afspraken.",
+  {
+    from: { type: "string", description: "Begin, ISO 8601" },
+    to: { type: "string", description: "Eind, ISO 8601" },
+    duration_minutes: { type: "integer", description: "Minimale lengte van een vrij blok, standaard 30" },
+    day_start: { type: "string", description: "HH:MM, standaard 09:00" },
+    day_end: { type: "string", description: "HH:MM, standaard 18:00" },
+  },
+  ["from", "to"],
+);
+
 const requestConnection = tool(
   "request_connection",
   "Gebruik dit als de gebruiker iets met mail of agenda wil maar die dienst niet (meer) verbonden is. " +
@@ -258,7 +287,7 @@ function connectorTools(ctx: ToolContext): ToolDef[] {
   }
   const calOk = ctx.calendar.status === "active";
   if (calOk) {
-    tools.push(calendarListTool);
+    tools.push(calendarListTool, calendarFreeSlotsTool);
     if (ctx.calendar.canWrite) tools.push(CALENDAR_CREATE_EVENT);
   }
   if (!gmailOk || !calOk) tools.push(requestConnection);
@@ -267,18 +296,19 @@ function connectorTools(ctx: ToolContext): ToolDef[] {
 
 /** Tools voor de chat. Connector-tools alleen met een actieve verbinding. */
 export function chatTools(ctx: ToolContext): ToolDef[] {
-  return [memoryRead, memoryWrite, createTask, cancelTask, createSchedule, webSearchTool, webFetchTool, ...DOCUMENT_TOOLS, ...connectorTools(ctx)];
+  return [memoryRead, memoryWrite, createTask, cancelTask, createSchedule, ...SCHEDULE_TOOLS, webSearchTool, webFetchTool, ...UTILITY_TOOLS, ...DOCUMENT_TOOLS, ...connectorTools(ctx)];
 }
 
 /** Tools voor een achtergrondstap. */
 export function workerTools(ctx: ToolContext): ToolDef[] {
-  return [webSearchTool, webFetchTool, memoryRead, memoryWrite, updateTask, ASK_USER, COMPLETE_STEP, ...DOCUMENT_TOOLS, ...connectorTools(ctx)];
+  // Geen memory_write in achtergrondtaken: daar is geen bericht van de gebruiker dat als bewijs kan dienen.
+  return [webSearchTool, webFetchTool, memoryRead, updateTask, ASK_USER, COMPLETE_STEP, ...UTILITY_TOOLS, ...DOCUMENT_TOOLS, ...connectorTools(ctx)];
 }
 
 /** Namen van tools die voor de Activity-lijst als zichtbare stap tellen. */
 export const ACTIVITY_TOOLS = new Set([
   "web_search", "web_fetch", "gmail_create_draft", "gmail_send", "gmail_search", "gmail_read",
-  "calendar_list_events", "calendar_create_event", "document_read", "document_search",
+  "calendar_list_events", "calendar_free_slots", "calendar_create_event", "document_read", "document_search", "run_now", "delete_schedule",
 ]);
 
 export function parseArgs(raw: string): Record<string, any> | null {
@@ -330,6 +360,10 @@ export async function executeTool(ctx: ToolContext, name: string, rawArgs: strin
           "(een mail maximaal ongeveer 3000 tekens: minder items, één zin per item).",
       );
     }
+    ctx.toolFailures ??= {};
+    if ((ctx.toolFailures[name] ?? 0) >= 3) {
+      throw new Error("STOP: deze tool is in deze beurt al 3 keer mislukt. Probeer hem niet nog eens; meld de gebruiker in één korte zin wat niet lukte.");
+    }
     // Tools die het model niet aangeboden kreeg, worden ook niet uitgevoerd.
     const offered = (ctx.origin === "chat" ? chatTools(ctx) : workerTools(ctx)).some((t) => t.function.name === name);
     if (!offered) throw new Error(`Tool ${name} is nu niet beschikbaar`);
@@ -338,6 +372,7 @@ export async function executeTool(ctx: ToolContext, name: string, rawArgs: strin
   } catch (e) {
     const failure = { error: e instanceof Error ? e.message : String(e) };
     output = failure;
+    (ctx.toolFailures ??= {})[name] = (ctx.toolFailures[name] ?? 0) + 1;
     // Ook in de serverlog (Vercel), zodat een falende tool te diagnosticeren is. Geen argumenten loggen.
     console.warn(`[tool] ${name} mislukt: ${failure.error.slice(0, 300)}`);
     forModel = JSON.stringify(
@@ -391,8 +426,11 @@ async function run(ctx: ToolContext, name: string, a: Record<string, any>): Prom
     }
 
     case "memory_write": {
-      const content = str(a.content, 1000);
-      if (!content) throw new Error("content is leeg");
+      const rawContent = str(a.content, 1000);
+      if (!rawContent) throw new Error("content is leeg");
+      const decision = decideMemoryWrite({ source: a.source, evidence: a.evidence, content: rawContent }, ctx.userText);
+      if (!decision.ok) return { ok: false, saved: false, reason: decision.reason, message: decision.message };
+      const content = decision.content;
       const kind = MEMORY_KINDS.includes(a.kind) ? a.kind : "fact";
       if (a.id) {
         const { data, error } = await db.from("dot_memories")
@@ -480,6 +518,16 @@ async function run(ctx: ToolContext, name: string, a: Record<string, any>): Prom
       const query = str(a.query, 300);
       if (!query) throw new Error("query is leeg");
       const results = await webSearch(query);
+      if (ctx.dedupeLinks) {
+        const sent = await recentSentUrls(db, userId);
+        if (sent.size) {
+          const { kept, dropped } = dropSentResults(results.results, sent);
+          if (dropped && !kept.length) {
+            throw new Error("Alle gevonden items stonden al in een eerdere nieuwsbrief. Zoek met een andere zoekterm naar nieuwer nieuws, of meld dat er niets nieuws is.");
+          }
+          return wrapUntrusted(`search:${query}`, { ...results, results: kept, summary: undefined, al_verstuurd_weggelaten: dropped });
+        }
+      }
       return wrapUntrusted(`search:${query}`, results);
     }
 
@@ -537,6 +585,22 @@ async function run(ctx: ToolContext, name: string, a: Record<string, any>): Prom
       const hits = await searchDocuments(userId, str(a.query, 100), db);
       return wrapUntrusted("documents:search", { results: hits });
     }
+
+    case "list_schedules":
+    case "update_schedule":
+    case "pause_schedule":
+    case "run_now":
+    case "delete_schedule":
+      return runScheduleTool(ctx, name, a);
+
+    case "calculate":
+      return runCalculate(a);
+
+    case "datetime":
+      return runDatetime(a);
+
+    case "calendar_free_slots":
+      return calendarFreeSlots(mailDeps(ctx), userId, a);
 
     case "calendar_list_events":
       return calendarListEvents(mailDeps(ctx), userId, a);

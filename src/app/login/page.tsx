@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { DotAvatar } from "@/components/DotAvatar";
+import { DotAvatar, DEFAULT_LOOK } from "@/components/DotAvatar";
+import { btn, field } from "@/components/ui";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -48,26 +49,19 @@ export default function LoginPage() {
   return (
     <main className="min-h-full flex items-center justify-center px-4 py-10">
       <div className="w-full max-w-sm">
-        <div className="flex flex-col items-center gap-3 mb-8">
-          <DotAvatar look={{ shape: "circle", color: "#8b7bff", eyes: "round", accessory: "antenna" }} size={88} busy />
-          <h1 className="text-2xl font-semibold">LangDot</h1>
-          <p className="text-muted text-sm text-center">Je persoonlijke agent die doorwerkt als jij er niet bent.</p>
+        <div className="flex flex-col items-center gap-3 mb-9">
+          <DotAvatar look={DEFAULT_LOOK} size={84} />
+          <h1 className="serif text-[34px] leading-tight">LangDot</h1>
+          <p className="text-muted text-[15px] text-center">Je persoonlijke agent die doorwerkt als jij er niet bent.</p>
         </div>
 
-        <form onSubmit={submit} className="bg-panel border border-line rounded-2xl p-5 space-y-3">
+        <form onSubmit={submit} className="bg-panel border border-line rounded-3xl p-6 space-y-4" style={{ boxShadow: "var(--shadow-card)" }}>
           <label className="block">
-            <span className="text-xs text-muted">E-mail</span>
-            <input
-              type="email"
-              required
-              autoComplete="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="mt-1 w-full rounded-lg bg-panel-2 border border-line px-3 py-2 outline-none focus:border-accent"
-            />
+            <span className="text-[13px] text-faint">E-mail</span>
+            <input type="email" required autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} className={`${field} mt-1`} />
           </label>
           <label className="block">
-            <span className="text-xs text-muted">Wachtwoord</span>
+            <span className="text-[13px] text-faint">Wachtwoord</span>
             <input
               type="password"
               required
@@ -75,22 +69,16 @@ export default function LoginPage() {
               autoComplete={mode === "signin" ? "current-password" : "new-password"}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="mt-1 w-full rounded-lg bg-panel-2 border border-line px-3 py-2 outline-none focus:border-accent"
+              className={`${field} mt-1`}
             />
           </label>
-          {msg && <p className={`text-sm ${msg.kind === "error" ? "text-bad" : "text-ok"}`}>{msg.text}</p>}
-          <button
-            disabled={busy}
-            className="w-full rounded-lg bg-accent text-white font-medium py-2 disabled:opacity-50 hover:brightness-110"
-          >
+          {msg && <p role={msg.kind === "error" ? "alert" : "status"} className={`text-[14px] ${msg.kind === "error" ? "text-bad" : "text-muted"}`}>{msg.text}</p>}
+          <button disabled={busy} className={`${btn.primary} w-full`}>
             {busy ? "Even geduld…" : mode === "signin" ? "Inloggen" : "Account maken"}
           </button>
         </form>
 
-        <button
-          onClick={() => setMode(mode === "signin" ? "signup" : "signin")}
-          className="block mx-auto mt-4 text-sm text-muted hover:text-fg"
-        >
+        <button onClick={() => setMode(mode === "signin" ? "signup" : "signin")} className="block mx-auto mt-4 text-[14px] text-muted hover:text-fg min-h-11 px-2">
           {mode === "signin" ? "Nog geen account? Aanmelden" : "Al een account? Inloggen"}
         </button>
       </div>
