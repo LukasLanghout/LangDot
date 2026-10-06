@@ -44,9 +44,13 @@ export type CompleteOptions = {
   onText?: (delta: string) => void;
   /** Voor het tokenbudget. Zonder userId geen budgetcontrole. */
   userId?: string | null;
+  /** Harde limiet voor deze ene aanroep (bv. de tijd die een serverless-aanroep nog heeft). */
+  timeoutMs?: number;
+  /** Niet opnieuw proberen binnen deze aanroep; de aanroeper regelt dat (bv. de volgende worker-tick). */
+  noRetry?: boolean;
 };
 
-export type CompleteResult = { content: string; toolCalls: ToolCall[]; usage: Usage; model: string };
+export type CompleteResult = { content: string; toolCalls: ToolCall[]; usage: Usage; model: string; truncated?: boolean };
 
 // ───────────────────────────── Config ─────────────────────────────
 
@@ -285,7 +289,7 @@ function params(model: string, opts: CompleteOptions) {
     model,
     messages: opts.messages,
     temperature: opts.temperature ?? 0.4,
-    max_tokens: opts.maxTokens ?? 2048,
+    max_tokens: opts.maxTokens ?? 4096,
   };
   if (opts.tools?.length) {
     p.tools = opts.tools;
@@ -294,13 +298,29 @@ function params(model: string, opts: CompleteOptions) {
   return p;
 }
 
+/**
+ * Kapotte of afgekapte JSON in tool-argumenten (gezien: lange mail, afgekapt bij max_tokens) mag NIET in de
+ * geschiedenis blijven staan: GonkaRouter weigert dan elk volgend verzoek met "400 Unterminated string".
+ * We vervangen ze door {"__invalid": true}; executeTool meldt het model dan dat de aanroep ongeldig was.
+ */
+export function safeArguments(raw: string) {
+  const text = raw.trim();
+  if (!text) return "{}";
+  try {
+    const v = JSON.parse(text);
+    return v && typeof v === "object" ? text : JSON.stringify({ __invalid: true });
+  } catch {
+    return JSON.stringify({ __invalid: true, preview: text.slice(0, 120) });
+  }
+}
+
 function normalizeCalls(calls: any[]): ToolCall[] {
   return calls
     .filter((c) => c && c.function?.name)
     .map((c, i) => ({
       id: c.id || `call_${Date.now()}_${i}`,
       type: "function" as const,
-      function: { name: String(c.function.name), arguments: String(c.function.arguments ?? "") },
+      function: { name: String(c.function.name), arguments: safeArguments(String(c.function.arguments ?? "")) },
     }));
 }
 
@@ -323,12 +343,18 @@ function toUsage(raw: any, opts: CompleteOptions, output: string): Usage {
 }
 
 async function once(model: string, opts: CompleteOptions): Promise<CompleteResult> {
-  const res: any = await getClient().chat.completions.create(params(model, opts) as any);
+  const res: any = await getClient().chat.completions.create(params(model, opts) as any, opts.timeoutMs ? { timeout: opts.timeoutMs } : undefined);
   assertModel(model, res?.model);
   const msg = res?.choices?.[0]?.message ?? {};
   const content = stripThink(typeof msg.content === "string" ? msg.content : "");
   const toolCalls = normalizeCalls(Array.isArray(msg.tool_calls) ? msg.tool_calls : []);
-  return { content, toolCalls, usage: toUsage(res?.usage, opts, content + JSON.stringify(toolCalls)), model: res?.model ?? model };
+  return {
+    content,
+    toolCalls,
+    usage: toUsage(res?.usage, opts, content + JSON.stringify(toolCalls)),
+    model: res?.model ?? model,
+    truncated: res?.choices?.[0]?.finish_reason === "length",
+  };
 }
 
 async function streamOnce(model: string, opts: CompleteOptions, state: { emitted: boolean }): Promise<CompleteResult> {
@@ -336,7 +362,7 @@ async function streamOnce(model: string, opts: CompleteOptions, state: { emitted
     ...params(model, opts),
     stream: true,
     stream_options: { include_usage: true },
-  } as any);
+  } as any, opts.timeoutMs ? { timeout: opts.timeoutMs } : undefined);
 
   const filter = new ThinkFilter();
   const calls: any[] = [];
@@ -399,7 +425,7 @@ export async function complete(opts: CompleteOptions): Promise<CompleteResult> {
     try {
       const result = await withRetry(
         () => (opts.onText ? streamOnce(model, opts, state) : once(model, opts)),
-        () => !state.emitted, // nooit opnieuw proberen als de gebruiker al tekst zag
+        () => !state.emitted && !opts.noRetry, // nooit opnieuw als de gebruiker al tekst zag, of als de aanroeper dat regelt
       );
       if (opts.userId) {
         await recordUsage(opts.userId, result.usage).catch((e) => console.error("[llm] usage opslaan mislukt:", describe(e)));

@@ -322,6 +322,12 @@ export async function executeTool(ctx: ToolContext, name: string, rawArgs: strin
 
   try {
     if (!args) throw new Error("Ongeldige JSON-argumenten");
+    if ((args as Record<string, unknown>).__invalid) {
+      throw new Error(
+        "Je tool-aanroep was ongeldig of afgekapt (waarschijnlijk te lang). Probeer het opnieuw met een kortere tekst " +
+          "(een mail maximaal ongeveer 3000 tekens: minder items, één zin per item).",
+      );
+    }
     // Tools die het model niet aangeboden kreeg, worden ook niet uitgevoerd.
     const offered = (ctx.origin === "chat" ? chatTools(ctx) : workerTools(ctx)).some((t) => t.function.name === name);
     if (!offered) throw new Error(`Tool ${name} is nu niet beschikbaar`);

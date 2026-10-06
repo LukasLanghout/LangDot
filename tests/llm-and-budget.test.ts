@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { checkBudget, recordUsage, type UsageStore } from "@/lib/budget";
 import { LlmError, userSafeMessage } from "@/lib/llm-errors";
-import { classify, collapseRepeat, llmConfig, stripThink, ThinkFilter } from "@/lib/llm";
+import { classify, collapseRepeat, llmConfig, safeArguments, stripThink, ThinkFilter } from "@/lib/llm";
 import { toHistory, unverifiedClaimWarning } from "@/lib/agent/chat";
 
 function usageStore(): UsageStore & { map: Map<string, number> } {
@@ -132,5 +132,28 @@ describe("vangnet tegen verzonnen bevestigingen", () => {
     expect(unverifiedClaimWarning("De mail is verstuurd.", new Set())).toContain("géén mail verstuurd");
     expect(unverifiedClaimWarning("De mail wordt morgen verstuurd.", new Set())).toBe("");
     expect(unverifiedClaimWarning("De mail is verstuurd.", new Set(["gmail_create_draft"]))).toBe("");
+  });
+});
+describe("kapotte tool-argumenten komen nooit in de geschiedenis", () => {
+  it("geldige JSON blijft ongewijzigd, leeg wordt {}", () => {
+    expect(safeArguments('{"to":["a@b.nl"]}')).toBe('{"to":["a@b.nl"]}');
+    expect(safeArguments("")).toBe("{}");
+  });
+
+  it("afgekapte JSON (lange mail bij max_tokens) wordt een onschadelijke marker, en blijft geldige JSON", () => {
+    const broken = '{"to":["ljlanghout@gmail.com"],"subject":"Technieuws","body":"1. OpenAI lanceert';
+    const safe = safeArguments(broken);
+    expect(() => JSON.parse(safe)).not.toThrow();
+    expect(JSON.parse(safe).__invalid).toBe(true);
+  });
+
+  it("executeTool meldt het model dat de aanroep ongeldig was (en voert niets uit)", async () => {
+    const { executeTool } = await import("@/lib/agent/tools");
+    const { mailDeps, memoryStore, toolCtx } = await import("./helpers");
+    const store = memoryStore();
+    const ctx = toolCtx({ mailDeps: mailDeps(store) });
+    const out = JSON.parse(await executeTool(ctx, "gmail_create_draft", safeArguments('{"to":["a@b.nl"],"body":"afgekapt')));
+    expect(out.error).toMatch(/ongeldig of afgekapt/);
+    expect(store.rows).toHaveLength(0);
   });
 });
