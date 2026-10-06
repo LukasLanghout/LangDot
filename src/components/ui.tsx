@@ -32,7 +32,7 @@ export function dayLabel(iso: string) {
   return d.toLocaleDateString("nl-NL", { weekday: "long", day: "numeric", month: "long", timeZone: TZ });
 }
 
-export const dayOf = dayKey;
+export const dayOf = (iso: string) => dayKey(new Date(iso));
 
 // ───────────────────────── Knoppen (tokens) ─────────────────────────
 // Hoogte 36 (desktop) of 44 (mobiel, tikdoel), radius 12, focusring uit globals.css.
