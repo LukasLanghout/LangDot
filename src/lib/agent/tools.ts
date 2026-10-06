@@ -33,6 +33,8 @@ export type ToolContext = {
   standing?: { scheduleId: string; to: string } | null;
   /** Cache van de dot-handle (Caura agent_id). */
   agentId?: string;
+  /** Worker: false in stappen die niet de mailstap zijn; dan krijgt het model geen opsteller/verzender aangeboden. */
+  allowMailTools?: boolean;
   /** Voor tests: vervang de mail-afhankelijkheden. */
   mailDeps?: MailToolDeps;
 };
@@ -156,7 +158,7 @@ export const GMAIL_CREATE_DRAFT = tool(
   {
     to: { type: "array", items: { type: "string" }, description: "E-mailadressen van ontvangers" },
     subject: { type: "string" },
-    body: { type: "string", description: "Volledige tekst van de mail" },
+    body: { type: "string", description: "Volledige tekst van de mail in MARKDOWN: koppen met #, **vet**, [tekst](url) voor bronnen, lijsten met -. Geen HTML-tags." },
     attachments: { type: "array", items: { type: "string" }, description: "Optioneel: document-id's (uit document_list) om mee te sturen" },
   },
   ["to", "subject", "body"],
@@ -251,7 +253,7 @@ function connectorTools(ctx: ToolContext): ToolDef[] {
   const g = ctx.gmail;
   const gmailOk = g.status === "active" && g.canSend;
   if (gmailOk) {
-    tools.push(GMAIL_CREATE_DRAFT, gmailSendTool);
+    if (ctx.allowMailTools !== false) tools.push(GMAIL_CREATE_DRAFT, gmailSendTool);
     if (g.canRead) tools.push(gmailSearchTool, gmailReadTool);
   }
   const calOk = ctx.calendar.status === "active";

@@ -232,6 +232,8 @@ async function executeStep(db: SupabaseClient, task: Task, deadline: number) {
   const toolCtx: ToolContext = {
     db, userId: task.user_id, taskId: task.id, origin: "worker", gmail: ctx.gmail, calendar: ctx.calendar, createdActionIds: [],
     standing: await standingPermission(db, task, ctx.gmail.email),
+    // Alleen de laatste stap, of een stap die zelf over mailen gaat, mag een mail opstellen/versturen.
+    allowMailTools: index === steps.length - 1 || /mail|stuur|verstuur|concept|opstel|bericht/i.test(steps[index]?.title ?? ""),
   };
   const tools = workerTools(toolCtx);
   const messages: ChatMessage[] = [

@@ -241,8 +241,9 @@ Je maakt een stappenplan voor een achtergrondtaak. Roep set_plan aan met 1 tot 6
 Middelen per stap: web_search, web_fetch, geheugen lezen/schrijven, de gebruiker een keuzevraag stellen (ask_user)${
     ctx.gmail.status === "active" ? ", een mail opstellen ter goedkeuring (gmail_create_draft)" : ""
   }${ctx.calendar.status === "active" ? ", de agenda bekijken (calendar_list_events) en een afspraak voorstellen (calendar_create_event)" : ""}.
-Moet er een mail verstuurd worden, neem dan één stap op om het concept op te stellen; versturen gebeurt pas na de klik
-van de gebruiker. Voeg GEEN aparte stap "rapporteren aan de gebruiker" toe; dat gebeurt automatisch.
+Moet er een mail verstuurd worden, neem dan precies één stap op om hem op te stellen, ALTIJD als LAATSTE stap; eerdere
+stappen versturen niets. Het versturen gebeurt pas na de klik van de gebruiker (of direct bij een staande toestemming
+voor een schema, maar dan alleen naar de eigen mail van de gebruiker). Voeg GEEN aparte stap "rapporteren aan de gebruiker" toe; dat gebeurt automatisch.
 Houd het klein: een simpele taak = 1 of 2 stappen.
 ${SAFETY}
 

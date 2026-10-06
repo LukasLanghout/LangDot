@@ -2,6 +2,7 @@
 
 import { ConnectorError } from "./errors";
 import { htmlToText } from "@/lib/web";
+import { markdownToHtml } from "@/lib/mail-format";
 
 const API = "https://gmail.googleapis.com/gmail/v1/users/me";
 
@@ -25,25 +26,39 @@ function filenameParam(name: string) {
   return /^[\x20-\x7e]*$/.test(safe) ? `filename="${safe}"` : `filename*=UTF-8''${encodeURIComponent(safe)}`;
 }
 
-/** Bouwt een RFC 2822-bericht: text/plain, of multipart/mixed met bijlagen. */
+/**
+ * Bouwt een RFC 2822-bericht. De tekst gaat mee als platte tekst én als nette HTML (Markdown → HTML),
+ * zodat de mail in elke mailapp goed leesbaar is. Met bijlagen: multipart/mixed eromheen.
+ */
 export function buildMime(mail: OutgoingMail, files: MailFile[] = []) {
   mail.to.forEach(assertHeaderSafe);
   const headers = [`To: ${mail.to.join(", ")}`, `Subject: ${encodeHeader(mail.subject)}`, "MIME-Version: 1.0"];
-  const textPart = ["Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", b64lines(Buffer.from(mail.body, "utf8"))];
-  if (!files.length) return [...headers, ...textPart].join("\r\n");
+  const stamp = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+  const alt = `langdot_alt_${stamp}`;
 
-  const boundary = `langdot_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
-  const parts = [
-    ...headers,
-    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+  const bodyParts = [
+    `--${alt}`,
+    "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
     "",
-    `--${boundary}`,
-    ...textPart,
+    b64lines(Buffer.from(mail.body, "utf8")),
+    `--${alt}`,
+    "Content-Type: text/html; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    b64lines(Buffer.from(markdownToHtml(mail.body), "utf8")),
+    `--${alt}--`,
   ];
+  const altHeader = `Content-Type: multipart/alternative; boundary="${alt}"`;
+
+  if (!files.length) return [...headers, altHeader, "", ...bodyParts, ""].join("\r\n");
+
+  const mixed = `langdot_mix_${stamp}`;
+  const parts = [...headers, `Content-Type: multipart/mixed; boundary="${mixed}"`, "", `--${mixed}`, altHeader, "", ...bodyParts];
   for (const f of files) {
     const mime = /^[\w.+-]+\/[\w.+-]+$/.test(f.mime) ? f.mime : "application/octet-stream";
     parts.push(
-      `--${boundary}`,
+      `--${mixed}`,
       `Content-Type: ${mime}`,
       "Content-Transfer-Encoding: base64",
       `Content-Disposition: attachment; ${filenameParam(f.name)}`,
@@ -51,10 +66,9 @@ export function buildMime(mail: OutgoingMail, files: MailFile[] = []) {
       b64lines(f.data),
     );
   }
-  parts.push(`--${boundary}--`, "");
+  parts.push(`--${mixed}--`, "");
   return parts.join("\r\n");
 }
-
 export function buildRawMessage(mail: OutgoingMail, files: MailFile[] = []) {
   return Buffer.from(buildMime(mail, files), "utf8").toString("base64url");
 }

@@ -38,6 +38,9 @@ export function memoryStore(): ActionStore & { rows: PendingAction[] } {
       const r = rows.find((x) => x.id === id && x.user_id === userId);
       if (r) Object.assign(r, patch);
     },
+    async countAutoSentForTask(userId, taskId) {
+      return rows.filter((r) => r.user_id === userId && r.task_id === taskId && r.type === "gmail_send" && r.status === "executed" && r.approved_by === "standing").length;
+    },
     async countExecutedSince(userId, since, type) {
       return rows.filter((r) => r.user_id === userId && r.type === type && r.status === "executed" && r.executed_at && new Date(r.executed_at) >= since).length;
     },

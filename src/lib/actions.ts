@@ -8,6 +8,7 @@
 
 import { DateTime, IANAZone } from "luxon";
 import { ConnectorError } from "@/lib/connectors/errors";
+import { normalizeMailBody } from "@/lib/mail-format";
 
 export type ActionStatus = "pending" | "approved" | "rejected" | "executed" | "expired";
 export type ActionType = "gmail_send" | "calendar_create_event" | "schedule_auto_send";
@@ -76,6 +77,8 @@ export interface ActionStore {
   transition(id: string, userId: string, from: ActionStatus, to: ActionStatus, patch?: Patch): Promise<PendingAction | null>;
   update(id: string, userId: string, patch: Patch): Promise<void>;
   countExecutedSince(userId: string, since: Date, type: ActionType): Promise<number>;
+  /** Aantal al uitgevoerde mails in deze taak die zonder klik zijn verstuurd (staande toestemming). */
+  countAutoSentForTask(userId: string, taskId: string): Promise<number>;
 }
 
 const num = (v: string | undefined, d: number) => (Number(v) > 0 ? Number(v) : d);
@@ -116,7 +119,8 @@ export function validateEmailPayload(input: { to?: unknown; subject?: unknown; b
   if (/[\r\n]/.test(subject)) return { ok: false, error: "Onderwerp mag geen regeleinde bevatten." };
   if (subject.length > 250) return { ok: false, error: "Onderwerp is te lang." };
 
-  const body = typeof input.body === "string" ? input.body.replace(/\r\n/g, "\n").trim() : "";
+  // Schreef het model HTML, dan wordt dat Markdown (leesbaar op de goedkeuringskaart); verzenden maakt er netjes HTML van.
+  const body = typeof input.body === "string" ? normalizeMailBody(input.body.replace(/\r\n/g, "\n")) : "";
   if (!body) return { ok: false, error: "De mail heeft geen tekst." };
   if (body.length > 20_000) return { ok: false, error: "De mail is te lang." };
 

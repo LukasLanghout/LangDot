@@ -22,6 +22,23 @@ describe("staande toestemming: automatisch mailen naar jezelf", () => {
     expect(store.rows[0]).toMatchObject({ status: "executed", approved_by: "standing" });
   });
 
+  it("maximaal één automatische mail per taak (geen dubbele mail in een tweede stap)", async () => {
+    const store = memoryStore();
+    const sent: any[] = [];
+    const c = ctx({ scheduleId: SCHEDULE.id, to: ME });
+    await gmailCreateDraft(mailDeps(store, sent), c, { to: [ME], subject: "Technieuws", body: "eerste" });
+    await expect(gmailCreateDraft(mailDeps(store, sent), c, { to: [ME], subject: "Technieuws", body: "tweede" }))
+      .rejects.toThrow(/al een mail verstuurd/);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("in stappen die niet de mailstap zijn krijgt het model geen mail-opsteller", () => {
+    const tools = (allowMailTools: boolean) =>
+      chatTools(toolCtx({ mailDeps: mailDeps(memoryStore()), allowMailTools })).map((t) => t.function.name);
+    expect(tools(true)).toContain("gmail_create_draft");
+    expect(tools(false)).not.toContain("gmail_create_draft");
+    expect(tools(false)).not.toContain("gmail_send");
+  });
   it("een mail aan iemand anders blijft altijd wachten op een klik, ook met toestemming", async () => {
     const store = memoryStore();
     const sent: any[] = [];

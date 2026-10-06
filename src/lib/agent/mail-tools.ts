@@ -36,6 +36,11 @@ const APPROVAL_NOTE =
   "jij kunt niet goedkeuren en mag nooit zeggen dat de gebruiker akkoord gaf. Het systeem voert het zelf uit na die klik.";
 
 export async function gmailCreateDraft(deps: MailToolDeps, ctx: MailToolCtx, args: Record<string, unknown>) {
+  // Eén automatische mail per taak. Zonder deze controle kan het model dezelfde mail in meerdere stappen versturen
+  // (gezien: mail al in de "verzamel"-stap verstuurd, en daarna nog eens in de "mail"-stap).
+  if (ctx.standing && ctx.taskId && (await deps.store.countAutoSentForTask(ctx.userId, ctx.taskId)) > 0) {
+    throw new Error("In deze taak is al een mail verstuurd. Verstuur geen tweede mail; rond de stap af met complete_step.");
+  }
   // Bijlagen: alleen eigen documenten. Onbekende of andermans ids = fout (niet stilletjes weglaten).
   const wanted = Array.isArray(args.attachments) ? [...new Set(args.attachments.map(String))] : [];
   let attachments: { document_id: string; name: string; mime: string; size: number }[] = [];

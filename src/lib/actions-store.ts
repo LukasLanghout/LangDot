@@ -32,6 +32,12 @@ export function supabaseActionStore(db: SupabaseClient = createAdminClient()): A
     async update(id, userId, patch) {
       await db.from("pending_actions").update(patch).eq("id", id).eq("user_id", userId);
     },
+    async countAutoSentForTask(userId, taskId) {
+      const { count } = await db.from("pending_actions")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId).eq("task_id", taskId).eq("type", "gmail_send").eq("status", "executed").eq("approved_by", "standing");
+      return count ?? 0;
+    },
     async countExecutedSince(userId, since, type) {
       const { count } = await db.from("pending_actions")
         .select("id", { count: "exact", head: true })
