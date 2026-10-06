@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { checkBudget, recordUsage, type UsageStore } from "@/lib/budget";
 import { LlmError, userSafeMessage } from "@/lib/llm-errors";
-import { classify, llmConfig, stripThink, ThinkFilter } from "@/lib/llm";
-import { toHistory } from "@/lib/agent/chat";
+import { classify, collapseRepeat, llmConfig, stripThink, ThinkFilter } from "@/lib/llm";
+import { toHistory, unverifiedClaimWarning } from "@/lib/agent/chat";
 
 function usageStore(): UsageStore & { map: Map<string, number> } {
   const map = new Map<string, number>();
@@ -86,6 +86,17 @@ describe("<think>-blokken komen nooit bij de gebruiker", () => {
     }
   });
 
+  it("losse sluittag zonder opening: alleen de tekst erna is het antwoord", () => {
+    expect(stripThink("Top. De schema's draaien.</think>\n\nTop. De schema's draaien.")).toBe("Top. De schema's draaien.");
+  });
+
+  it("vangnet: een letterlijk herhaald antwoord wordt één keer getoond", () => {
+    const a = "Top. De nieuwe schema's draaien nu. Eerste mailtjes komen morgenochtend om 08:20. 👍";
+    expect(collapseRepeat(`${a} ${a}`)).toBe(a);
+    expect(collapseRepeat(`${a}\n\n${a}`)).toBe(a);
+    expect(collapseRepeat("Ja. Nee.")).toBe("Ja. Nee.");
+    expect(collapseRepeat(`${a} En nog iets anders.`)).toBe(`${a} En nog iets anders.`);
+  });
   it("gewone alinea's (2 regelovergangen) in het antwoord blijven intact", () => {
     const f = new ThinkFilter();
     const text = "<think>kort</think>\n\nAlinea 1.\n\nAlinea 2.";
@@ -104,5 +115,22 @@ describe("antwoorden horen bij het juiste bericht", () => {
     ]);
     expect(h.map((m) => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
     expect(String(h[1].content)).toMatch(/geen antwoord/);
+  });
+});
+
+describe("vangnet tegen verzonnen bevestigingen", () => {
+  it("waarschuwt als een schema wordt bevestigd zonder create_schedule", () => {
+    const w = unverifiedClaimWarning("Staat. ✅ Werkdagen 08:20 en 12:30. De nieuwe schema's draaien nu.", new Set());
+    expect(w).toContain("géén schema aangemaakt");
+  });
+
+  it("zegt niets als create_schedule echt is aangeroepen", () => {
+    expect(unverifiedClaimWarning("Het schema staat klaar: werkdagen 08:20.", new Set(["create_schedule"]))).toBe("");
+  });
+
+  it("waarschuwt bij 'is verstuurd' zonder mail-tool, maar niet bij een toekomstige mail", () => {
+    expect(unverifiedClaimWarning("De mail is verstuurd.", new Set())).toContain("géén mail verstuurd");
+    expect(unverifiedClaimWarning("De mail wordt morgen verstuurd.", new Set())).toBe("");
+    expect(unverifiedClaimWarning("De mail is verstuurd.", new Set(["gmail_create_draft"]))).toBe("");
   });
 });

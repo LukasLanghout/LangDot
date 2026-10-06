@@ -22,6 +22,7 @@ describe("hallucinatieregel: geen bron = geen feitelijk antwoord", () => {
     expect(prompt).toContain("Geen zoekresultaat of bron = geen feitelijk antwoord");
     expect(prompt).toMatch(/verzin NOOIT\s+namen, adressen of cijfers/);
     expect(SAFETY).toContain("Ik kon hier geen betrouwbare informatie over vinden");
+    expect(SAFETY).toContain("Zonder tool-call is er niets gebeurd");
   });
 
   it.skipIf(!liveModel)("LIVE: bij een verzonnen bedrijf zonder zoekresultaten verzint het model niets", async () => {

@@ -127,6 +127,24 @@ async function attachedDocuments(db: SupabaseClient, userId: string, ids: string
   return parts.length ? `\n\n[Bijgevoegde documenten]\n${parts.join("\n")}` : "";
 }
 
+/**
+ * Vangnet tegen verzonnen bevestigingen: beweert het antwoord dat een schema is aangemaakt of een mail is
+ * verstuurd, terwijl daar in deze beurt geen tool voor is aangeroepen, dan waarschuwt de server de gebruiker.
+ * (Gezien: "Staat ✅ Werkdagen 08:20 en 12:30" zonder dat er iets was aangemaakt.)
+ */
+export function unverifiedClaimWarning(text: string, called: Set<string>) {
+  const notes: string[] = [];
+  const scheduleClaim = /(schema|check-?in)/i.test(text) && /(aangemaakt|ingepland|draait|draaien|staat\b|staan\b|klaar)/i.test(text);
+  if (scheduleClaim && !called.has("create_schedule")) {
+    notes.push("Ik heb in deze beurt géén schema aangemaakt, ook al leest mijn antwoord zo. Controleer **Gepland**, of maak het daar zelf aan met **+ Nieuw schema**.");
+  }
+  const mailClaim = /\b(is|zijn|heb ik|hebben we)\b[^.!?\n]{0,40}\b(verstuurd|gemaild|verzonden)\b/i.test(text);
+  if (mailClaim && !called.has("gmail_create_draft") && !called.has("gmail_send")) {
+    notes.push("Ik heb in deze beurt géén mail verstuurd, ook al leest mijn antwoord zo.");
+  }
+  return notes.length ? `\n\n⚠ ${notes.join("\n\n⚠ ")}` : "";
+}
+
 /** Eén chatbeurt: history laden, tool-loop draaien, tekst live streamen. */
 export async function runChat(opts: {
   db: SupabaseClient;
@@ -162,6 +180,7 @@ export async function runChat(opts: {
   // en herhalen die daarna; die tussentekst plakken we er dus niet voor (dat gaf dubbele antwoorden).
   let roundText = "";
   let interimText = "";
+  const calledTools = new Set<string>();
 
   try {
     for (let round = 0; round <= MAX_ROUNDS; round++) {
@@ -187,6 +206,7 @@ export async function runChat(opts: {
       messages.push({ role: "assistant", content: result.content || null, tool_calls: result.toolCalls });
       for (const call of result.toolCalls) {
         const name = call.function.name;
+        calledTools.add(name);
         send({ t: "tool", name });
         if (ACTIVITY_TOOLS.has(name)) {
           await activity.step(stepTitle(name, parseArgs(call.function.arguments)));
@@ -203,7 +223,8 @@ export async function runChat(opts: {
   }
 
   // Gaf de laatste ronde geen tekst, dan blijft de tussentekst het antwoord.
-  const text = roundText.trim() || interimText.trim();
+  let text = roundText.trim() || interimText.trim();
+  text += unverifiedClaimWarning(text, calledTools);
 
   // Gevraagd om automatisch naar jezelf te mailen: één toestemmingskaart voor alle schema's van deze beurt.
   if (toolCtx.autoSendSchedules?.length && ctx.gmail.email) {
