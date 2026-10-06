@@ -134,6 +134,9 @@ supabase/
   migrations/0004_push_calendar.sql    push-abonnementen, actietype calendar_create_event
   migrations/0005_documents.sql        documenten-tabel en privé opslag-bucket
   migrations/0006_auto_send.sql        staande toestemming: schema's die automatisch naar jezelf mailen
+  migrations/0007_task_scratch.sql     tussenstand van taakstappen (hervatten tussen ticks)
+  migrations/0008_schedule_delete.sql  actietype schedule_delete (goedkeuringskaart)
+  migrations/0009_dedupe.sql           documenten ontdubbelen op hash, verstuurde nieuwslinks
   cron.sql                             pg_cron heartbeat
 src/
   instrumentation.ts                   modelcontrole bij opstarten
@@ -162,7 +165,7 @@ scripts/                               PowerShell-checks tegen GonkaRouter
 
 ### 1. Supabase
 
-Voer in de **SQL Editor** in volgorde uit: `0001_langdot.sql`, `0002_caura.sql`, `0003_gonka_connectors.sql`, `0004_push_calendar.sql`, `0005_documents.sql`, `0006_auto_send.sql`.
+Voer in de **SQL Editor** in volgorde uit: `0001_langdot.sql`, `0002_caura.sql`, `0003_gonka_connectors.sql`, `0004_push_calendar.sql`, `0005_documents.sql`, `0006_auto_send.sql`, `0007_task_scratch.sql`, `0008_schedule_delete.sql`, `0009_dedupe.sql`.
 Zet onder **Authentication → URL Configuration** je Vercel-URL als Site URL en voeg
 `https://<jouw-app>/auth/callback` toe aan de Redirect URLs.
 
@@ -179,7 +182,7 @@ Zie `.env.example` (alle waarden leeg). Lokaal: kopieer naar `.env.local`. Op Ve
 | `GONKA_MODEL` | | default `MiniMaxAI/MiniMax-M2.7` (zie testresultaat) |
 | `GONKA_FALLBACK_MODELS` | | standaard leeg = nooit een ander model |
 | `DAILY_TOKEN_BUDGET` | | default 200000 per gebruiker per dag |
-| `MAX_TASK_STEPS` | | default 25 LLM-aanroepen per taak |
+| `MAX_TASK_STEPS` | | default 40 geslaagde LLM-aanroepen per taak |
 | `MAX_EMAILS_PER_DAY`, `MAX_RECIPIENTS_PER_EMAIL` | | default 20 en 5 |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | voor Gmail | zie "Gmail koppelen" |
 | `GOOGLE_REDIRECT_URI` | | default `<origin>/api/connectors/google/callback` |
@@ -269,12 +272,32 @@ Je krijgt een melding bij: een mail of afspraak die op goedkeuring wacht, een vr
 klaar of mislukt is, en een verbinding die verlopen is. Niet bij gewone chatantwoorden (dan zit je al in de app).
 Op iPhone/iPad werkt het alleen als je LangDot eerst via **Deel → Zet op beginscherm** installeert.
 
+## Zelfkennis, bronnen en geheugen
+
+- **Capability manifest:** elke prompt begint met wat de dot wél kan zien (persoonlijke Gmail en Agenda, uploads, web) en wat
+  bewust NIET (werkmail/Outlook, Lancyr-, Fontys- en Innova-accounts). Zie `src/lib/agent/capabilities.ts` en Verbindingen.
+- **Werk-onderwerpen:** noemt je vraag Lancyr, Fontys, Innova, Outlook of een werkmail, dan zet de **server** zelf de eerste zin
+  "Ik zie alleen je persoonlijke Gmail en Agenda, niet je werkmail…" voor het antwoord, met de route "plak de tekst of stuur door".
+- **Bronnen:** claims over mail, agenda en web noemen bron en tijd; "niet gevonden in [bron]"; bij web een brontabel.
+- **Geheugen:** `memory_write` vereist `source` en `evidence`. De server controleert dat het bewijs letterlijk in je laatste bericht
+  staat. Afgeleide feiten worden NIET opgeslagen (de dot vraagt "Klopt het dat…?"). Items krijgen `[gezegd datum]` of
+  `[handmatig, datum, kan verouderd zijn]`. Achtergrondtaken kunnen niets in het geheugen schrijven.
+- **Stijl:** "liever korte antwoorden" wordt in code afgedwongen: max 3 zinnen, geen emoji, geen afsluitvraag. Antwoorden met
+  bronnen, lijsten, tabellen of code worden niet ingekort.
+- **Tools:** `list_schedules`, `update_schedule`, `pause_schedule`, `run_now`, `delete_schedule` (met goedkeuringskaart),
+  `calculate`, `datetime`, `calendar_free_slots` (plus conflictdetectie in `calendar_list_events`). Een tool die 3 keer faalt, wordt
+  in die beurt gestopt. Alleen-lezen tools draaien parallel.
+- **Nieuwsbrief zonder dubbelen:** verstuurde links worden onthouden (`sent_links`); geplande taken zien ze niet meer in zoekresultaten.
+- **Documenten:** dezelfde inhoud wordt één keer bewaard (hash), mislukte uitlezing kan opnieuw (`/api/documents/[id]/retry`),
+  pdf-tekst krijgt `[pagina N]`-markeringen. Mislukte taken kunnen opnieuw (`/api/tasks/[id]/retry`).
+
 ## Automatisch mailen naar jezelf (staande toestemming)
 
 Voor terugkerende mails aan jezelf, zoals "stuur me elke werkdag om 8:20 en 12:30 het technieuws", hoef je niet
 elke keer te klikken:
 
-1. Je vraagt het in de chat. De dot maakt de schema's aan (`create_schedule` met `auto_send_to_self`).
+0. **Het betrouwbaarst:** Gepland → **+ Nieuw schema**, met het vinkje "Mail het resultaat automatisch naar mij". Het vinkje is dan de toestemming; het taalmodel is er niet bij nodig. Voorgevuld: technieuws om 08:20 en 12:30 op werkdagen.
+   Of: je vraagt het in de chat. De dot maakt de schema's aan (`create_schedule` met `auto_send_to_self`).
 2. Je krijgt **eenmalig** een toestemmingskaart (🔁 *Toestaan* / *Afwijzen*) voor al die schema's samen.
 3. Na *Toestaan* verstuurt de dot op die momenten de mail direct, zonder kaart.
 
@@ -306,6 +329,25 @@ in een map per gebruiker. De tekst wordt op de server eruit gehaald met open-sou
 - **Als bijlage mailen:** de dot geeft document-id's mee aan `gmail_create_draft`; de goedkeuringskaart toont de bijlagen.
   Max 5 bijlagen en 15 MB samen. Alleen eigen documenten; de inhoud wordt pas na jouw klik geladen.
 - Inhoud van niet-vastgezette documenten is data, geen instructie (zoals webpagina's en mails).
+
+## Ontwerp (visuele laag)
+
+Rustig, warm en minimaal: Apple-rust met een Anthropic-achtige warmte. Alleen de presentatielaag is vervangen; functies, API's en data zijn niet aangepast.
+
+- **Tokens**: CSS-variabelen `--c-*` in `src/app/globals.css`, licht als standaard, donker via `prefers-color-scheme` of de handmatige schakelaar (`data-theme` op `<html>`, bewaard in `localStorage`). Tailwind-namen (`bg-bg`, `bg-panel`, `text-muted`, `bg-accent`, enz.) wijzen naar die variabelen.
+- **Lettertypen**: Inter voor de interface, Newsreader (serif) voor koppen en antwoorden van de dot, via `next/font`.
+- **Icoonset**: één set lijn-iconen in `src/components/Icon.tsx` (Lucide-stijl, zelf ingebed). Geen emoji in de interface en niet in antwoorden van de dot (afgedwongen in `src/lib/agent/style.ts`).
+- **Beweging**: 150 tot 260 ms met `cubic-bezier(0.2, 0.8, 0.2, 1)`; `prefers-reduced-motion` schakelt animaties uit.
+- **Indeling**: chat als één gecentreerde kolom (max 720 px); smalle zijbalk (64 px) die uitklapt tot 240 px; uitschuifpaneel rechts (380 px) met icoon-tabs, op mobiel een volledig scherm; menu op mobiel als bottom sheet.
+- **Styleguide**: open `/styleguide` voor alle bouwstenen in het huidige thema.
+
+### Bewuste afwijkingen van het ontwerpbriefje
+
+- Tertiaire tekst (`#75716A` licht, `#928E86` donker) en de gevulde accentknop (`#B5573A` licht met witte tekst) zijn iets afgeweken, omdat de oorspronkelijke waarden geen contrast van 4,5:1 halen. Statuskleuren zijn om dezelfde reden bijgesteld.
+- Iconen zijn zelf ingebed in Lucide-stijl in plaats van het pakket te installeren (er kon lokaal niets geïnstalleerd worden).
+- Bronchips halen favicons op via `google.com/s2/favicons`: dat is een verzoek naar een derde partij met alleen het domein.
+- De begroeting noemt geen voornaam, want de app slaat die niet op.
+- Er zijn geen voor/na-screenshots: de app is niet lokaal gebouwd of gedraaid (geen Node op de ontwikkelmachine).
 
 ## Tests
 
