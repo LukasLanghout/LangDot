@@ -57,7 +57,10 @@ export async function GET() {
     const { error } = await db.from("dot_schedules").select("auto_send, auto_send_to").limit(1);
     add({ name: "Automatisch mailen (schema's)", ok: !error, detail: error ? "kolommen ontbreken" : "aanwezig", fix: "Voer migratie 0006_auto_send.sql uit." });
   }
-  // Mag een afspraak-voorstel opgeslagen worden? (check constraint uit migratie 0004)
+  {
+    const { error } = await db.from("dot_tasks").select("scratch").limit(1);
+    add({ name: "Taken hervatten tussen ticks", ok: !error, detail: error ? "kolom ontbreekt (taken beginnen elke tick opnieuw en lopen dan vast)" : "aanwezig", fix: "Voer migratie 0007_task_scratch.sql uit." });
+  }  // Mag een afspraak-voorstel opgeslagen worden? (check constraint uit migratie 0004)
   {
     const { data, error } = await db.from("pending_actions")
       .insert({ user_id: user.id, type: "calendar_create_event", payload: { diagnose: true }, status: "expired" })

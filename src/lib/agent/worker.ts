@@ -19,12 +19,14 @@ import { loadAgentContext, plannerPrompt, stepBrief, summaryPrompt, workerSystem
 const LOCK_MS = 120_000;
 const MAX_TOOL_ROUNDS = 6;
 const MAX_ATTEMPTS = 3;
+/** Minimale resterende tijd om aan een modelaanroep te beginnen (een reasoning-model doet er 20-30 s over). */
+const MIN_MS_PER_LLM_CALL = 28_000;
 const ACTION_TTL_DAYS = 7;
 
 /** Maximaal aantal LLM-aanroepen per taak, zodat een lus nooit eindeloos tokens verbrandt. */
 export function maxTaskSteps() {
   const n = Number(process.env.MAX_TASK_STEPS);
-  return Number.isFinite(n) && n > 0 ? n : 25;
+  return Number.isFinite(n) && n > 0 ? n : 40;
 }
 
 class StepLimitError extends Error {
@@ -178,11 +180,12 @@ async function stopReason(db: SupabaseClient, task: Task): Promise<"cancelled" |
 
 /** LLM-aanroep binnen een taak: telt mee voor de stappenlimiet en het tokenbudget. */
 async function taskComplete(db: SupabaseClient, task: Task, opts: CompleteOptions) {
-  const count = (task.step_count ?? 0) + 1;
-  if (count > maxTaskSteps()) throw new StepLimitError();
-  task.step_count = count;
-  await db.from("dot_tasks").update({ step_count: count }).eq("id", task.id);
-  return complete({ ...opts, userId: task.user_id });
+  if ((task.step_count ?? 0) >= maxTaskSteps()) throw new StepLimitError();
+  const result = await complete({ ...opts, userId: task.user_id });
+  // Pas na een geslaagde aanroep tellen: een afgebroken of mislukte poging telt niet mee.
+  task.step_count = (task.step_count ?? 0) + 1;
+  await db.from("dot_tasks").update({ step_count: task.step_count }).eq("id", task.id);
+  return result;
 }
 
 // ───────────────────────────── Taak-loop ─────────────────────────────
@@ -233,9 +236,20 @@ async function executeStep(db: SupabaseClient, task: Task, deadline: number) {
     { role: "user", content: stepBrief(task, index) },
   ];
 
-  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    if (Date.now() > deadline - 6_000) {
-      // Tijd op: lock vrijgeven, de volgende tick begint deze stap opnieuw.
+  // Hervatten: een vorige tick kan halverwege deze stap zijn gestopt (tijdsbudget). De tussenstand staat in `scratch`,
+  // zodat we niet telkens opnieuw beginnen (dat verbrandde alle stappen: 25 aanroepen, stap 0 nooit klaar).
+  const saved = (task as Task & { scratch?: Scratch | null }).scratch;
+  let startRound = 0;
+  if (saved && saved.step === index && Array.isArray(saved.messages)) {
+    messages.push(...saved.messages);
+    startRound = Math.min(Number(saved.rounds) || 0, MAX_TOOL_ROUNDS);
+  }
+  const keepProgress = (round: number) => saveScratch(db, task.id, { step: index, rounds: round, messages: messages.slice(2) });
+
+  for (let round = startRound; round < MAX_TOOL_ROUNDS; round++) {
+    // Een modelaanroep kan 20 tot 30 seconden duren; begin er alleen aan als er genoeg tijd over is.
+    if (Date.now() > deadline - MIN_MS_PER_LLM_CALL) {
+      await keepProgress(round);
       await saveRunning(db, task, { locked_until: null });
       return;
     }
@@ -265,9 +279,15 @@ async function executeStep(db: SupabaseClient, task: Task, deadline: number) {
       // Een voorstel (mail of afspraak) stopt de stap: de taak wacht op de klik van de gebruiker.
       if (toolCtx.createdActionIds.length) return awaitApproval(db, task, toolCtx.createdActionIds);
     }
+    await keepProgress(round + 1);
   }
 
-  // Tool-budget op: laat het model afronden met wat het heeft.
+  // Tool-budget op: laat het model afronden met wat het heeft (alleen als er tijd is; anders volgende tick).
+  if (Date.now() > deadline - MIN_MS_PER_LLM_CALL) {
+    await keepProgress(MAX_TOOL_ROUNDS);
+    await saveRunning(db, task, { locked_until: null });
+    return;
+  }
   messages.push({ role: "user", content: "Je tool-budget voor deze stap is op. Vat nu het resultaat van deze stap samen." });
   const final = await taskComplete(db, task, { messages, tools, toolChoice: "none" });
   return completeStep(db, task, index, final.content || "Stap afgerond (tool-budget op).");
@@ -286,10 +306,19 @@ async function standingPermission(db: SupabaseClient, task: Task, gmailEmail: st
   return { scheduleId: data.id as string, to: String(data.auto_send_to) };
 }
 
+type Scratch = { step: number; rounds: number; messages: ChatMessage[] };
+
+/** Tussenstand van een stap bewaren/wissen. Aparte update: bestaat de kolom niet (migratie 0007), dan faalt alleen dit. */
+async function saveScratch(db: SupabaseClient, taskId: string, scratch: Scratch | null) {
+  const { error } = await db.from("dot_tasks").update({ scratch }).eq("id", taskId).eq("status", "running");
+  if (error && scratch) console.warn("[worker] tussenstand bewaren mislukt (migratie 0007 uitgevoerd?):", error.message);
+}
+
 async function completeStep(db: SupabaseClient, task: Task, index: number, result: string) {
   const steps: Step[] = [...task.steps];
   steps[index] = { ...steps[index], status: "done", result: result.slice(0, 4000) };
   await saveRunning(db, task, { steps, current_step: index + 1, locked_until: null });
+  await saveScratch(db, task.id, null);
   await logAudit(db, { userId: task.user_id, actor: "agent", action: "step_done", taskId: task.id, input: { step: index + 1, title: steps[index].title } });
 }
 
